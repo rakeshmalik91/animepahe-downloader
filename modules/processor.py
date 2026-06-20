@@ -172,12 +172,34 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
             return False, anime_id, anime_title
 
         episodes = data.get('data', [])
-        episodes.sort(key=lambda x: x.get('episode', 0))
+        last_page = data.get('last_page', 1)
         
+        for current_page in range(2, last_page + 1):
+            page_api_url = f"{config.ANIMEPAHE_URL}/api?m=release&id={anime_id}&sort=episode_desc&page={current_page}"
+            page_res = client.get(page_api_url, headers={
+                "Referer": anime_page_url,
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/javascript, */*; q=0.01"
+            })
+            if page_res.status_code == 200:
+                try:
+                    page_data = page_res.json()
+                    episodes.extend(page_data.get('data', []))
+                except:
+                    pass
+
+        def get_ep_num(ep_obj):
+            try:
+                return int(float(ep_obj.get('episode', 0)))
+            except (ValueError, TypeError):
+                return 0
+
+        episodes.sort(key=get_ep_num)
+
         if episodes_filter:
-            new_episodes = [ep for ep in episodes if ep.get('episode', 0) in episodes_filter]
+            new_episodes = [ep for ep in episodes if get_ep_num(ep) in episodes_filter]
         else:
-            new_episodes = [ep for ep in episodes if ep.get('episode', 0) > last_ep]
+            new_episodes = [ep for ep in episodes if get_ep_num(ep) > last_ep]
         
         if not new_episodes:
             from datetime import datetime, timedelta
