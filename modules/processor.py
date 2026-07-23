@@ -14,7 +14,7 @@ import threading
 from datetime import datetime
 import config
 
-from .utils import log_debug, detect_lang_from_files, get_latest_episode_local, is_episode_already_present, send_windows_notification, ensure_working_mirror
+from .utils import log_debug, detect_lang_from_files, get_latest_episode_local, is_episode_already_present, send_windows_notification, ensure_working_mirror, prompt_user
 from .db import update_last_checked, save_tracked, get_tracked
 from .scraper import search_anime, get_direct_link, resolve_kwik_direct
 from .downloader import download_file
@@ -34,9 +34,9 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
         anime_id, anime_title, _, dist = search_anime(client, search_query)
         if anime_id and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
             tqdm.write(f"  [Warning] Best match '{anime_title}' has a high name distance from '{search_query}'.", file=sys.stdout)
-            ans = input(f"  Is '{anime_title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
+            ans = prompt_user(f"  Is '{anime_title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
             if ans == 'u':
-                new_url = input("    Enter AnimePahe URL: ").strip()
+                new_url = prompt_user("    Enter AnimePahe URL: ").strip()
                 match = re.search(r'/anime/([a-f0-9-]+)', new_url)
                 if match:
                     anime_id = match.group(1)
@@ -141,9 +141,9 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
             new_id, new_title, _, dist = search_anime(client, search_query)
             if new_id and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
                 tqdm.write(f"  [Warning] Best match '{new_title}' has a high name distance from '{search_query}'.", file=sys.stdout)
-                ans = input(f"  Is '{new_title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
+                ans = prompt_user(f"  Is '{new_title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
                 if ans == 'u':
-                    new_url = input("    Enter AnimePahe URL: ").strip()
+                    new_url = prompt_user("    Enter AnimePahe URL: ").strip()
                     match = re.search(r'/anime/([a-f0-9-]+)', new_url)
                     if match:
                         new_id = match.group(1)
@@ -360,7 +360,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                         with prompt_lock:
                             if is_default_fallback:
                                 lang_label = 'English dub' if other == 'en' else 'Japanese sub'
-                                ans = input(f"    - {effective_lang} not available. Download {lang_label} instead? [y/n]: ").lower()
+                                ans = prompt_user(f"    - {effective_lang} not available. Download {lang_label} instead? [y/n]: ").lower()
                                 if ans == 'y':
                                     effective_lang = other
                                 is_default_fallback = False
@@ -377,7 +377,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                         return
                     else:
                         lang_label = 'English dub' if other == 'en' else 'Japanese sub'
-                        ans = input(f"    - {effective_lang} not available. Download {lang_label} instead? [y/n]: ").lower()
+                        ans = prompt_user(f"    - {effective_lang} not available. Download {lang_label} instead? [y/n]: ").lower()
                         if ans == 'y':
                             direct, actual_lang, _ = get_direct_link(client, anime_id, ep['session'], quality, other)
                         else:
@@ -427,7 +427,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                         if parallel == 1:
                             if getattr(config, 'OPEN_BROWSER_ON_FAIL', False):
                                 webbrowser.open(direct)
-                            ans = input(f"    - Episode {ep_num} download failed. [r(etry)/s(kip)/f(orever-skip)/q(uit)]: ").lower()
+                            ans = prompt_user(f"    - Episode {ep_num} download failed. [r(etry)/s(kip)/f(orever-skip)/q(uit)]: ").lower()
                             if ans == 'r':
                                 retry_count = 0; direct, _, _ = get_direct_link(client, anime_id, ep['session'], quality, actual_lang); continue
                             elif ans == 'f':

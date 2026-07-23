@@ -1,6 +1,11 @@
-# AnimePahe Auto-Downloader Deep-Dive
+---
+name: animepahe-downloader-architecture
+description: Technical architecture, Cloudflare bypass mechanics, multi-tiered concurrency models, segmented downloading, and Jikan search fallback engine for AnimePahe Auto-Downloader.
+---
 
-This document details the underlying mechanics of the AnimePahe Auto-Downloader, focusing specifically on network handling, Cloudflare circumvention, and the multi-tiered concurrency models used for extraction and downloading.
+# AnimePahe Auto-Downloader Architecture & Implementation
+
+This skill documents the underlying mechanics of the AnimePahe Auto-Downloader, focusing specifically on network handling, Cloudflare circumvention, and the multi-tiered concurrency models used for extraction and downloading.
 
 ## 1. Cloudflare Handling & Network Layer (`modules/scraper.py`)
 

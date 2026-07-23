@@ -25,8 +25,66 @@ def init_db():
                  (site TEXT PRIMARY KEY, cookies TEXT, user_agent TEXT, last_updated TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS mirrors 
                  (site_type TEXT PRIMARY KEY, url TEXT, last_updated TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS settings 
+                 (key TEXT PRIMARY KEY, value TEXT)''')
     conn.commit()
     conn.close()
+
+    load_db_settings_into_config()
+
+def save_setting(key, value):
+    """Save a setting key-value pair into database."""
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        c.execute("REPLACE INTO settings VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_debug(f"save_setting error: {e}")
+
+def get_setting(key, default=None):
+    """Get a setting value from database."""
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else default
+    except Exception as e:
+        log_debug(f"get_setting error: {e}")
+        return default
+
+def load_db_settings_into_config():
+    """Load settings saved in DB and override config module attributes."""
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT key, value FROM settings")
+        rows = c.fetchall()
+        conn.close()
+
+        for key, value in rows:
+            if hasattr(config, key):
+                curr_val = getattr(config, key)
+                if isinstance(curr_val, bool):
+                    val = str(value).lower() in ('true', '1', 'yes')
+                elif isinstance(curr_val, int):
+                    val = int(value)
+                else:
+                    val = value
+                setattr(config, key, val)
+            else:
+                if str(value).lower() in ('true', 'false'):
+                    val = str(value).lower() == 'true'
+                elif str(value).isdigit():
+                    val = int(value)
+                else:
+                    val = value
+                setattr(config, key, val)
+    except Exception as e:
+        log_debug(f"load_db_settings_into_config error: {e}")
 
 def get_tracked(folder_path):
     """Get tracking info with normalization fallback and ancestral detection.
@@ -216,5 +274,19 @@ def save_working_mirror(site_type, url):
         return True
     except Exception as e:
         log_debug(f"DB save_working_mirror error: {e}")
+        return False
+
+def clear_sessions():
+    """Clear cached Cloudflare & site sessions (animepahe & kwik) from DB."""
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM sessions")
+        conn.commit()
+        conn.close()
+        log_debug("Cleared cached Cloudflare sessions from DB.")
+        return True
+    except Exception as e:
+        log_debug(f"DB clear_sessions error: {e}")
         return False
 

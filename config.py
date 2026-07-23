@@ -23,6 +23,12 @@ KWIK_URLS = [
 JIKAN_API_URLS = [
     "https://api.jikan.moe/v4",
 ]
+ANILIST_API_URLS = [
+    "https://graphql.anilist.co",
+]
+KITSU_API_URLS = [
+    "https://kitsu.io/api/edge",
+]
 
 # Browser emulation
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -53,6 +59,7 @@ DEFAULT_PARALLEL_DOWNLOADS = 2          # Number of concurrent episode downloads
 
 # Accessibility settings
 ENABLE_NOTIFICATIONS = True
+AUTO_RUN_SCANNER_ON_STARTUP = False
 
 # Database for tracking
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tracking.db")

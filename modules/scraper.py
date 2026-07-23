@@ -95,6 +95,15 @@ def get_browser_cookies(url, extra_url=None):
     options = uc.ChromeOptions()
     options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     
+    existing_chrome_hwnds = set()
+    try:
+        from modules.browser_embed import get_container_hwnd, get_existing_chrome_hwnds
+        if get_container_hwnd():
+            existing_chrome_hwnds = get_existing_chrome_hwnds()
+            options.add_argument("--window-position=-32000,-32000")
+    except Exception:
+        pass
+    
     import tempfile
     import shutil
     temp_dl_dir = tempfile.mkdtemp(prefix="animepahe_temp_")
@@ -157,6 +166,12 @@ def get_browser_cookies(url, extra_url=None):
             else:
                 raise e
     
+    try:
+        from modules.browser_embed import embed_chrome_driver, detach_current_embedded
+        embed_chrome_driver(driver, existing_hwnds=existing_chrome_hwnds)
+    except Exception as embed_err:
+        log_debug(f"Failed to embed Chrome driver: {embed_err}")
+
     resolved_url = None
     try:
         driver.get(url)
@@ -198,28 +213,29 @@ def get_browser_cookies(url, extra_url=None):
                         logs = driver.get_log("performance")
                         for entry in logs:
                             entry_text = entry.get("message", "")
-                            if "owocdn" in entry_text or "vault" in entry_text:
-                                # Search for any string that looks like an owocdn/vault URL
-                                matches = re.findall(r'(https?://[^"\\\s]+\.(?:mp4|mkv)[^"\\\s]*)', entry_text.replace("\\/", "/"))
-                                if not matches:
-                                    matches = re.findall(r'(https?://[^"\\\s]*(?:owocdn|vault)[^"\\\s]*)', entry_text.replace("\\/", "/"))
-                                
-                                for f_url in matches:
-                                    if "token=" in f_url or ".mp4" in f_url:
-                                        resolved_url = f_url
+                            if "owocdn.top" in entry_text or "m3u8" in entry_text:
+                                match = re.search(r'https?://[^\s"\'\\]+', entry_text)
+                                if match:
+                                    found = match.group(0)
+                                    if "owocdn.top" in found or ".m3u8" in found:
+                                        log_debug(f"Captured direct link from performance log: {found}")
+                                        resolved_url = found
                                         break
-                            if resolved_url: break
-                        if resolved_url: break
+                    except Exception as pe:
+                        log_debug(f"Error checking performance log: {pe}")
+                    
+                    if resolved_url: break
+                    
+                    # B. Check current URL of all windows
+                    try:
+                        for handle in driver.window_handles:
+                            driver.switch_to.window(handle)
+                            if "owocdn.top" in driver.current_url:
+                                resolved_url = driver.current_url
+                                break
                     except: pass
 
-                    # B. Check Current URL (sometimes it updates)
-                    try:
-                        curr = driver.current_url
-                        if "owocdn.top" in curr or "vault" in curr:
-                            resolved_url = curr
-                            break
-                    except: pass
-                    
+                    if resolved_url: break
                     time.sleep(1)
                 
                 if resolved_url:
@@ -249,6 +265,10 @@ def get_browser_cookies(url, extra_url=None):
         log_debug(f"Browser bypass error: {e}")
         return None, None, None
     finally:
+        try:
+            from modules.browser_embed import detach_current_embedded
+            detach_current_embedded()
+        except: pass
         try: 
             if 'driver' in locals() and driver:
                 driver.quit()
@@ -530,6 +550,44 @@ def get_direct_link(client, anime_id, session, target_quality="720p", target_lan
         log_debug(f"Extraction error: {e}")
     return None, None, set()
 
+def fetch_anilist_kitsu_titles(client, query):
+    """Fallback search using AniList & Kitsu APIs when Jikan API is down or timing out."""
+    alt_titles = set()
+    # 1. Try AniList GraphQL API
+    try:
+        gql = "query ($search: String) { Media (search: $search, type: ANIME) { title { romaji english } synonyms } }"
+        res = client.post("https://graphql.anilist.co", json={"query": gql, "variables": {"search": query}}, timeout=8)
+        if res.status_code == 200:
+            data = res.json().get("data", {}).get("Media") or {}
+            title_obj = data.get("title") or {}
+            if title_obj.get("english"):
+                alt_titles.add(title_obj["english"])
+            if title_obj.get("romaji"):
+                alt_titles.add(title_obj["romaji"])
+            for syn in data.get("synonyms") or []:
+                if syn and isinstance(syn, str):
+                    alt_titles.add(syn)
+    except Exception as e:
+        log_debug(f"AniList fallback error: {e}")
+
+    # 2. Try Kitsu REST API if AniList returned empty
+    if not alt_titles:
+        try:
+            res = client.get(f"https://kitsu.io/api/edge/anime?filter[text]={query}", timeout=8)
+            if res.status_code == 200:
+                data = res.json().get("data", [])
+                if data:
+                    attrs = data[0].get("attributes") or {}
+                    if attrs.get("canonicalTitle"):
+                        alt_titles.add(attrs["canonicalTitle"])
+                    for ab in attrs.get("abbreviatedTitles") or []:
+                        if ab and isinstance(ab, str):
+                            alt_titles.add(ab)
+        except Exception as e:
+            log_debug(f"Kitsu fallback error: {e}")
+
+    return alt_titles
+
 def search_anime(client, query, return_all=False):
     """Returns (anime_id, title, api_ok) or if return_all=True returns (list_of_tuples, api_ok). api_ok=True means API responded (even if no match)."""
     # Normalize full-width colon to standard colon for search
@@ -589,14 +647,13 @@ def search_anime(client, query, return_all=False):
             has_tv = any(item.get('type', '').upper() == 'TV' for item in all_data)
             if not has_tv:
                 log_debug(f"Search for '{query}' returned only movies/specials. Trying Jikan API for alternative titles...")
-                
-                # Ensure we have a working Jikan mirror
-                if ensure_working_jikan_mirror(client):
-                    try:
+                alt_titles = set()
+                jikan_ok = False
+                try:
+                    if ensure_working_jikan_mirror(client):
                         jikan_url = f"{config.JIKAN_API_URL}/anime?q={query}&type=tv&limit=1"
                         jikan_res = client.get(jikan_url, timeout=10)
                         
-                        # If Jikan mirror fails (e.g. 503 or 429), try rotating once
                         if jikan_res.status_code >= 400:
                             log_debug(f"Jikan API error ({jikan_res.status_code}). Attempting mirror rotation...")
                             if ensure_working_jikan_mirror(client):
@@ -607,39 +664,43 @@ def search_anime(client, query, return_all=False):
                             try:
                                 jdata = jikan_res.json()
                             except:
-                                log_debug("Jikan API returned invalid JSON.")
                                 jdata = None
                                 
                             if jdata and jdata.get('data'):
                                 anime_info = jdata['data'][0]
-                                alt_titles = set()
                                 if anime_info.get('title_english'):
                                     alt_titles.add(anime_info['title_english'])
                                 if anime_info.get('title_synonyms'):
                                     for syn in anime_info['title_synonyms']:
                                         alt_titles.add(syn)
+                                jikan_ok = True
+                except Exception as e:
+                    log_debug(f"Jikan API fetch error: {e}")
+
+                if not jikan_ok or not alt_titles:
+                    log_debug("Jikan API unavailable or returned 0 results. Trying AniList & Kitsu fallback APIs...")
+                    alt_titles.update(fetch_anilist_kitsu_titles(client, query))
                                 
-                                log_debug(f"Jikan API found alternative titles: {list(alt_titles)}")
-                                for alt in alt_titles:
-                                    alt_clean = alt.replace('：', ' ').replace(':', ' ')
-                                    if alt_clean.lower() == query.lower():
-                                        continue
-                                    log_debug(f"Trying alternative title search: '{alt_clean}'")
-                                    try:
-                                        alt_url = f"{config.ANIMEPAHE_URL}/api?m=search&q={alt_clean}"
-                                        alt_res = client.get(alt_url, headers={"X-Requested-With": "XMLHttpRequest"})
-                                        if alt_res.status_code == 200:
-                                            alt_data = alt_res.json()
-                                            if alt_data and alt_data.get('data'):
-                                                for aitem in alt_data['data']:
-                                                    asid = aitem.get('session')
-                                                    if asid and asid not in seen_ids:
-                                                        seen_ids.add(asid)
-                                                        all_data.append(aitem)
-                                    except Exception as e:
-                                        pass
-                    except Exception as e:
-                        log_debug(f"Jikan API fallback error: {e}")
+                if alt_titles:
+                    log_debug(f"Found alternative titles: {list(alt_titles)}")
+                    for alt in alt_titles:
+                        alt_clean = alt.replace('：', ' ').replace(':', ' ')
+                        if alt_clean.lower() == query.lower():
+                            continue
+                        log_debug(f"Trying alternative title search: '{alt_clean}'")
+                        try:
+                            alt_url = f"{config.ANIMEPAHE_URL}/api?m=search&q={alt_clean}"
+                            alt_res = client.get(alt_url, headers={"X-Requested-With": "XMLHttpRequest"})
+                            if alt_res.status_code == 200:
+                                alt_data = alt_res.json()
+                                if alt_data and alt_data.get('data'):
+                                    for aitem in alt_data['data']:
+                                        asid = aitem.get('session')
+                                        if asid and asid not in seen_ids:
+                                            seen_ids.add(asid)
+                                            all_data.append(aitem)
+                        except Exception as e:
+                            pass
             
     if not api_ok:
         return ([], False) if return_all else (None, None, False, float('inf'))

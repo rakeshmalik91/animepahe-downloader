@@ -14,15 +14,26 @@ A powerful set of scripts and modules designed to automate the process of tracki
 - **Mirror Support**: Automatically rotates through available AnimePahe and Kwik mirrors to ensure high availability.
 - **Database Persistence**: Uses a local SQLite database (`tracking.db`) to remember tracked folders and avoid duplicate downloads.
 
+- **Modern Desktop GUI**: A standalone desktop GUI (`gui.py`) with real-time log output, mirror health monitoring, database tracking manager, and interactive prompts.
+
 ## Usage
 
-### Getting Started
+### Graphical User Interface (GUI)
+Launch the GUI either directly or via the CLI flag:
+```powershell
+python gui.py
+# OR
+python animepahe_download.py --gui
+```
+
+### Getting Started (CLI)
 Simply run the script with no arguments to perform a full library scan and update:
 ```powershell
 python animepahe_download.py
 ```
 
 ### Common Commands
+- **Launch GUI**: `python animepahe_download.py --gui`
 - **Download specific series**: `python animepahe_download.py "Frieren, Jujutsu Kaisen"`
 - **Download all seasons of an anime**: `python animepahe_download.py "One Piece" --all-seasons`
 - **Check for new sequel seasons**: `python animepahe_download.py --new-seasons`
@@ -30,7 +41,8 @@ python animepahe_download.py
 
 ## File Structure
 
-- `animepahe_download.py`: The entry point for the application.
+- `animepahe_download.py`: The entry point for the application CLI and `--gui` launcher.
+- `gui.py`: Standalone Desktop Graphical User Interface script.
 - `config.py`: Local settings including base download paths, default quality, and mirror lists.
 - `tracking.db`: Database file tracking which anime IDs map to which local folders.
 - `modules/`: Contains the core logic for web scraping, database management, and download processing.
@@ -60,3 +72,5 @@ For example, to run database tests:
 python -m unittest tests/test_db.py
 ```
 
+### Screenshots
+<img src="media/ss1.jpg" alt="AnimePahe Auto-Downloader GUI" width="650" />

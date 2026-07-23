@@ -14,6 +14,25 @@ import threading
 from datetime import datetime
 import config
 
+PROMPT_HANDLER = None
+
+def set_prompt_handler(handler):
+    global PROMPT_HANDLER
+    PROMPT_HANDLER = handler
+
+def prompt_user(prompt_text, default="n"):
+    global PROMPT_HANDLER
+    if PROMPT_HANDLER is not None:
+        try:
+            res = PROMPT_HANDLER(prompt_text, default)
+            return res.strip().lower() if isinstance(res, str) else res
+        except Exception as e:
+            log_debug(f"Prompt handler error: {e}")
+            return default
+    try:
+        return input(prompt_text).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return default
 
 def log_debug(msg):
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n"
@@ -49,8 +68,14 @@ def ensure_working_kwik_mirror(client, verbose=False):
 def ensure_working_jikan_mirror(client, verbose=False):
     return _ensure_working_site_mirror(client, "jikan", verbose)
 
+def ensure_working_anilist_mirror(client, verbose=False):
+    return _ensure_working_site_mirror(client, "anilist", verbose)
+
+def ensure_working_kitsu_mirror(client, verbose=False):
+    return _ensure_working_site_mirror(client, "kitsu", verbose)
+
 def _ensure_working_site_mirror(client, site_type, verbose=False):
-    """Generic mirror checker for AnimePahe or Kwik."""
+    """Generic mirror checker for AnimePahe, Kwik, Jikan, AniList, or Kitsu."""
     from .db import get_last_working_mirror, save_working_mirror
     
     if site_type == "animepahe":
@@ -62,9 +87,19 @@ def _ensure_working_site_mirror(client, site_type, verbose=False):
         display_name = "AnimePahe"
     elif site_type == "jikan":
         last_working = get_last_working_mirror("jikan")
-        mirrors = config.JIKAN_API_URLS.copy()
+        mirrors = getattr(config, "JIKAN_API_URLS", ["https://api.jikan.moe/v4"]).copy()
         current_url = getattr(config, "JIKAN_API_URL", last_working or mirrors[0])
         display_name = "Jikan"
+    elif site_type == "anilist":
+        last_working = get_last_working_mirror("anilist")
+        mirrors = getattr(config, "ANILIST_API_URLS", ["https://graphql.anilist.co"]).copy()
+        current_url = getattr(config, "ANILIST_API_URL", last_working or mirrors[0])
+        display_name = "AniList"
+    elif site_type == "kitsu":
+        last_working = get_last_working_mirror("kitsu")
+        mirrors = getattr(config, "KITSU_API_URLS", ["https://kitsu.io/api/edge"]).copy()
+        current_url = getattr(config, "KITSU_API_URL", last_working or mirrors[0])
+        display_name = "Kitsu"
     else:
         last_working = get_last_working_mirror("kwik")
         mirrors = config.KWIK_URLS.copy()
@@ -129,6 +164,10 @@ def _ensure_working_site_mirror(client, site_type, verbose=False):
                     client.headers.update({"Referer": f"{final_url}/"})
                 elif site_type == "jikan":
                     config.JIKAN_API_URL = final_url
+                elif site_type == "anilist":
+                    config.ANILIST_API_URL = final_url
+                elif site_type == "kitsu":
+                    config.KITSU_API_URL = final_url
                 else:
                     config.KWIK_URL = final_url
                 

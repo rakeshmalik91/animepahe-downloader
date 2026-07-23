@@ -74,14 +74,14 @@ if config.FORCE_IPV4:
         return socket.AF_INET
     urllib3_conn.allowed_gai_family = allowed_gai_family
 
-from modules.utils import log_debug, normalize_path, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror
+from modules.utils import log_debug, normalize_path, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror, prompt_user
 from modules.db import init_db, get_folder_by_id, get_tracked, save_tracked, cleanup_db
 from modules.scraper import search_anime
 from modules.processor import process_one_folder
 
-def main():
+def main(cli_args=None):
     init_db()
-    log_debug(f"\n--- NEW SESSION: {' '.join(sys.argv)} ---")
+    log_debug(f"\n--- NEW SESSION: {' '.join(sys.argv if cli_args is None else sys.argv[:1] + cli_args)} ---")
     
     parser = argparse.ArgumentParser(description="AnimePahe Auto-Downloader")
     parser.add_argument("name", nargs='?', help="Anime name(s) or folder name(s), comma-separated (optional)")
@@ -96,8 +96,14 @@ def main():
     parser.add_argument("--parallel", type=int, default=config.DEFAULT_PARALLEL_DOWNLOADS, help="Number of parallel episode downloads")
     parser.add_argument("--skip-folder", help="Manually add a folder to the skip list forever")
     parser.add_argument("--unskip-folder", help="Manually remove a folder from the skip list")
+    parser.add_argument("--gui", action="store_true", help="Launch GUI interface")
     
-    args = parser.parse_args()
+    args = parser.parse_args(cli_args)
+    
+    if args.gui:
+        import gui
+        gui.main()
+        return
     
     if args.skip_folder:
         target_path = os.path.abspath(os.path.join(config.BASE_DOWNLOAD_DIR, args.skip_folder))
@@ -312,7 +318,7 @@ def main():
                         elif s == max_local_season and y > max_local_year: is_newer = True
                         if not is_newer: continue
                         
-                    ans = input(f"  New season found: '{r_title}'. Track and download? [y/N/i(gnore entire folder)]: ").lower()
+                    ans = prompt_user(f"  New season found: '{r_title}'. Track and download? [y/N/i(gnore entire folder)]: ").lower()
                     if ans == 'y':
                         sub_folder_name = r_clean
                         if sub_folder_name.lower().startswith(d.lower()):
@@ -354,7 +360,7 @@ def main():
                         ans = 'y'
                         tqdm.write(f"  Auto-downloading '{r_title}'...", file=sys.stdout)
                     else:
-                        ans = input(f"  Track and download '{r_title}'? [y/N]: ").lower()
+                        ans = prompt_user(f"  Track and download '{r_title}'? [y/N]: ").lower()
                     
                     if ans == 'y':
                         sub_folder_name = r_clean
@@ -427,9 +433,9 @@ def main():
                 
                 if aid and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
                     tqdm.write(f"  [Warning] Best match '{title}' has a high name distance from '{search_query}'.", file=sys.stdout)
-                    ans = input(f"  Is '{title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
+                    ans = prompt_user(f"  Is '{title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
                     if ans == 'u':
-                        new_url = input("    Enter AnimePahe URL: ").strip()
+                        new_url = prompt_user("    Enter AnimePahe URL: ").strip()
                         match = re.search(r'/anime/([a-f0-9-]+)', new_url)
                         if match:
                             aid = match.group(1)
@@ -551,9 +557,9 @@ def main():
                 dist_confirmed_url = False
                 if aid and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
                     tqdm.write(f"  [Warning] Best match '{title}' has a high name distance from '{search_query}'.", file=sys.stdout)
-                    ans = input(f"  Is '{title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
+                    ans = prompt_user(f"  Is '{title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
                     if ans == 'u':
-                        new_url = input("    Enter AnimePahe URL: ").strip()
+                        new_url = prompt_user("    Enter AnimePahe URL: ").strip()
                         match = re.search(r'/anime/([a-f0-9-]+)', new_url)
                         if match:
                             aid = match.group(1)
@@ -574,7 +580,7 @@ def main():
                         ans = 'y'
                     else:
                         tqdm.write(f"\n[New Folder: {rel_path}]", file=sys.stdout)
-                        ans = input(f"  Track and download '{title or 'Unknown Series'}'? [y(es)/n(o)/s(kip)/f(skip entire folder)/u(rl)]: ").lower()
+                        ans = prompt_user(f"  Track and download '{title or 'Unknown Series'}'? [y(es)/n(o)/s(kip)/f(skip entire folder)/u(rl)]: ").lower()
                     
                     if ans == 'y':
                         save_tracked(folder_path, aid, title, True)
@@ -582,7 +588,7 @@ def main():
                         if success and not title and final_title:
                             save_tracked(folder_path, final_aid, final_title, True)
                     elif ans == 'u':
-                        new_url = input("    Enter AnimePahe URL: ").strip()
+                        new_url = prompt_user("    Enter AnimePahe URL: ").strip()
                         match = re.search(r'/anime/([a-f0-9-]+)', new_url)
                         if match:
                             new_aid = match.group(1)
@@ -597,7 +603,7 @@ def main():
                         if len(parts) > 1:
                             top_level = parts[0]
                             top_path = os.path.abspath(os.path.join(config.BASE_DOWNLOAD_DIR, top_level))
-                            ans2 = input(f"    - Skip just this folder ({folder_name}) or the whole tree '{top_level}'? [f/t]: ").lower()
+                            ans2 = prompt_user(f"    - Skip just this folder ({folder_name}) or the whole tree '{top_level}'? [f/t]: ").lower()
                             if ans2 == 't':
                                 tqdm.write(f"    - Skipping ENTIRE TREE (root: {top_level}) forever.", file=sys.stdout)
                                 save_tracked(top_path, None, None, False)
