@@ -143,6 +143,7 @@ class AnimePaheGUI:
         self.prompt_queue = queue.Queue()
         self.prompt_result_event = threading.Event()
         self.prompt_response = None
+        self.auto_close_countdown_id = None
 
         # Redirect stdout and stderr
         self.orig_stdout = sys.stdout
@@ -715,6 +716,18 @@ class AnimePaheGUI:
         self.btn_clear_queue = ttk.Button(console_hdr, text="Clear Queue (0)", command=self.action_clear_queue, state="disabled")
         self.btn_clear_queue.pack(side=tk.RIGHT, padx=5)
 
+        # "Close after all tasks complete" checkbox (persisted in DB)
+        # Only restore the saved value when auto-scan on startup is enabled;
+        # otherwise the checkbox starts unchecked so the app won't close unexpectedly.
+        db_val = get_setting("close_after_tasks", "false").lower() in ("true", "1", "yes")
+        auto_scan_on = getattr(config, "AUTO_RUN_SCANNER_ON_STARTUP", False)
+        self.close_after_tasks_var = tk.BooleanVar(value=db_val and auto_scan_on)
+        self.chk_close_after = ttk.Checkbutton(
+            console_hdr, text="Close after all tasks complete",
+            variable=self.close_after_tasks_var, command=self._on_close_after_toggled
+        )
+        self.chk_close_after.pack(side=tk.RIGHT, padx=10)
+
         # GUI Multi-Progress Bar Container Panel (Packed dynamically only when progress bars are active)
         self.progress_frame = ttk.Frame(self.console_frame)
         self.active_progress_bars = {}
@@ -1121,6 +1134,29 @@ class AnimePaheGUI:
             self.btn_stop_scan.config(state="disabled")
             self.update_queue_ui()
             self.append_log("\n🏁 All queued tasks completed.\n")
+            if self.close_after_tasks_var.get():
+                self._start_auto_close_countdown()
+
+    def _on_close_after_toggled(self):
+        """Persist the checkbox state to DB and cancel any active countdown if unchecked."""
+        save_setting("close_after_tasks", str(self.close_after_tasks_var.get()))
+        if not self.close_after_tasks_var.get() and self.auto_close_countdown_id is not None:
+            self.root.after_cancel(self.auto_close_countdown_id)
+            self.auto_close_countdown_id = None
+            self.append_log("\n⏹️ Auto-close cancelled.\n")
+
+    def _start_auto_close_countdown(self, remaining=10):
+        """Countdown from `remaining` seconds then close the app."""
+        if not self.close_after_tasks_var.get():
+            self.auto_close_countdown_id = None
+            return
+        if remaining <= 0:
+            self.auto_close_countdown_id = None
+            self.append_log("\n👋 Closing application now.\n")
+            self.on_close()
+            return
+        self.append_log(f"⏳ Auto-closing in {remaining}s... (uncheck to cancel)\n")
+        self.auto_close_countdown_id = self.root.after(1000, self._start_auto_close_countdown, remaining - 1)
 
     def action_stop_task(self):
         if not self.task_queue.empty():
