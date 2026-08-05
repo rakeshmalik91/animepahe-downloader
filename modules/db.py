@@ -152,6 +152,31 @@ def update_last_checked(folder_path):
     conn.commit()
     conn.close()
 
+def rename_tracked_folder(old_path, new_path):
+    """Update tracking DB entries when a folder is renamed on disk."""
+    if not old_path or not new_path or old_path == new_path:
+        return
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE tracking SET folder_path = ? WHERE folder_path = ?", (new_path, old_path))
+        
+        old_prefix = os.path.normpath(old_path) + os.sep
+        c.execute("SELECT folder_path FROM tracking")
+        rows = c.fetchall()
+        for (folder_p,) in rows:
+            if folder_p:
+                norm_p = os.path.normpath(folder_p)
+                if norm_p.startswith(old_prefix):
+                    rel = norm_p[len(old_prefix):]
+                    updated_sub = os.path.join(new_path, rel)
+                    c.execute("UPDATE tracking SET folder_path = ? WHERE folder_path = ?", (updated_sub, folder_p))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_debug(f"DB rename_tracked_folder error: {e}")
+
+
 def cleanup_db():
     """Remove tracking entries for folders that no longer exist on disk."""
     try:

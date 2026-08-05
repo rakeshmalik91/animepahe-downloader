@@ -198,17 +198,130 @@ class TestUtils(unittest.TestCase):
         success = ensure_working_mirror(mock_client, verbose=True)
         self.assertFalse(success)
 
-    @patch("modules.db.get_last_working_mirror", return_value=None)
-    @patch("modules.db.save_working_mirror")
-    def test_ensure_working_site_mirror_failure(self, mock_save, mock_get_last):
-        mock_client = MagicMock()
-        # Raise exception on get
-        mock_client.get.side_effect = httpx.ConnectError("Connection refused")
-
         # Test jikan site type
         success = ensure_working_jikan_mirror(mock_client, verbose=True)
         self.assertFalse(success)
         mock_save.assert_not_called()
 
+    def test_parse_year_tag(self):
+        from modules.utils import parse_year_tag
+        self.assertEqual(parse_year_tag(2020), "(2020)")
+        self.assertEqual(parse_year_tag(2020, 2024), "(2020-2024)")
+        self.assertEqual(parse_year_tag(2020, 2020), "(2020)")
+        self.assertEqual(parse_year_tag(2020, is_ongoing=True), "(2020-)")
+        self.assertEqual(parse_year_tag(2020, status="Currently Airing"), "(2020-)")
+        self.assertEqual(parse_year_tag(2020, status="Finished Airing"), "(2020)")
+        self.assertEqual(parse_year_tag(None), "")
+
+    def test_is_season_folder_name(self):
+        from modules.utils import is_season_folder_name
+        self.assertTrue(is_season_folder_name("Season 1"))
+        self.assertTrue(is_season_folder_name("Season 01"))
+        self.assertTrue(is_season_folder_name("Season 1 (2020)"))
+        self.assertTrue(is_season_folder_name("S2"))
+        self.assertTrue(is_season_folder_name("Part 1"))
+        self.assertTrue(is_season_folder_name("1st Season"))
+        self.assertTrue(is_season_folder_name("OVAs"))
+        self.assertTrue(is_season_folder_name("Movie"))
+        self.assertFalse(is_season_folder_name("Some Anime"))
+        self.assertFalse(is_season_folder_name("Some Anime (2020)"))
+        self.assertFalse(is_season_folder_name("Frieren"))
+
+    def test_format_anime_folder_name(self):
+        from modules.utils import format_anime_folder_name
+        # Anime folders -> add year tag if missing
+        self.assertEqual(format_anime_folder_name("Some Anime", "(2020)"), "Some Anime (2020)")
+        self.assertEqual(format_anime_folder_name("Some Anime", "(2020-2024)"), "Some Anime (2020-2024)")
+        self.assertEqual(format_anime_folder_name("Some Anime", "(2020-)"), "Some Anime (2020-)")
+        # Already has year tag -> keep intact
+        self.assertEqual(format_anime_folder_name("Some Anime (2020)", "(2020)"), "Some Anime (2020)")
+        self.assertEqual(format_anime_folder_name("Some Anime (2020-2024)", "(2020-2024)"), "Some Anime (2020-2024)")
+        self.assertEqual(format_anime_folder_name("Some Anime (2020-)", "(2020-)"), "Some Anime (2020-)")
+        # Season folders -> MUST NOT add year tag, and strip year tag if present
+        self.assertEqual(format_anime_folder_name("Season 1", "(2020)"), "Season 1")
+        self.assertEqual(format_anime_folder_name("Season 1 (2020)", "(2020)"), "Season 1")
+        self.assertEqual(format_anime_folder_name("S2 (2020)", "(2020)"), "S2")
+
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_anime_folder(self, mock_db_rename, mock_rename, mock_exists):
+        from modules.utils import ensure_folder_year
+        mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Some Anime (2020)"
+        res = ensure_folder_year(r"D:\Downloads\ANIME\Some Anime", anime_title="Some Anime", meta={"year": 2020, "status": "Finished Airing"})
+        self.assertEqual(res, r"D:\Downloads\ANIME\Some Anime (2020)")
+        mock_rename.assert_called_once_with(r"D:\Downloads\ANIME\Some Anime", r"D:\Downloads\ANIME\Some Anime (2020)")
+        mock_db_rename.assert_called_once_with(r"D:\Downloads\ANIME\Some Anime", r"D:\Downloads\ANIME\Some Anime (2020)")
+
+    @patch("os.path.exists", return_value=True)
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_disabled_when_flag_false(self, mock_db_rename, mock_rename, mock_exists):
+        from modules.utils import ensure_folder_year
+        config.ENABLE_YEAR_TAGS = False
+        res = ensure_folder_year(r"D:\Downloads\ANIME\Some Anime", anime_title="Some Anime", meta={"year": 2020})
+        self.assertEqual(res, r"D:\Downloads\ANIME\Some Anime")
+        mock_rename.assert_not_called()
+        config.ENABLE_YEAR_TAGS = True
+
+
+
+    def test_get_anime_parent_folder(self):
+        from modules.utils import get_anime_parent_folder
+        config.BASE_DOWNLOAD_DIR = r"D:\Downloads\ANIME"
+        self.assertEqual(get_anime_parent_folder(r"D:\Downloads\ANIME\One Piece"), r"D:\Downloads\ANIME\One Piece")
+        self.assertEqual(get_anime_parent_folder(r"D:\Downloads\ANIME\Mushoku Tensei\Season 3"), r"D:\Downloads\ANIME\Mushoku Tensei")
+        self.assertEqual(get_anime_parent_folder(r"D:\Downloads\ANIME\Mushoku Tensei\Season 3\Extra"), r"D:\Downloads\ANIME\Mushoku Tensei")
+
+    @patch("os.path.exists", return_value=True)
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_season_folder_remains_clean(self, mock_db_rename, mock_rename, mock_exists):
+        from modules.utils import ensure_folder_year
+        # Season folder whose parent already has year tag should not be renamed
+        res = ensure_folder_year(r"D:\Downloads\ANIME\Some Anime (2020)\Season 1", anime_title="Some Anime", meta={"year": 2020})
+        self.assertEqual(res, r"D:\Downloads\ANIME\Some Anime (2020)\Season 1")
+        mock_rename.assert_not_called()
+
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_nested_season_folder(self, mock_db_rename, mock_rename, mock_exists):
+        from modules.utils import ensure_folder_year
+        config.BASE_DOWNLOAD_DIR = r"D:\Downloads\ANIME"
+        # When called on a season subfolder, ensure the PARENT anime folder gets the year tag!
+        mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Mushoku Tensei (2021-)"
+        res = ensure_folder_year(r"D:\Downloads\ANIME\Mushoku Tensei\Season 3", anime_title="Mushoku Tensei", meta={"year": 2021, "status": "Currently Airing"})
+        self.assertEqual(res, r"D:\Downloads\ANIME\Mushoku Tensei (2021-)\Season 3")
+        mock_rename.assert_called_once_with(r"D:\Downloads\ANIME\Mushoku Tensei", r"D:\Downloads\ANIME\Mushoku Tensei (2021-)")
+        mock_db_rename.assert_called_once_with(r"D:\Downloads\ANIME\Mushoku Tensei", r"D:\Downloads\ANIME\Mushoku Tensei (2021-)")
+
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_uses_min_start_year(self, mock_db_rename, mock_rename, mock_exists):
+        from modules.utils import ensure_folder_year
+        config.BASE_DOWNLOAD_DIR = r"D:\Downloads\ANIME"
+        # Mock search_anime returning multiple seasons: S1 (2022), S2 (2023), S3 (2026, Currently Airing)
+        mock_client = MagicMock()
+        mock_results = [
+            ("aid1", "Bleach S1", "Bleach Thousand-Year Blood War", {"year": 2022, "status": "Finished Airing"}),
+            ("aid2", "Bleach S2", "Bleach Thousand-Year Blood War - The Separation", {"year": 2023, "status": "Finished Airing"}),
+            ("aid3", "Bleach S3", "Bleach Thousand-Year Blood War - The Calamity", {"year": 2026, "status": "Currently Airing"}),
+        ]
+        with patch("modules.scraper.search_anime", return_value=(mock_results, True)):
+            mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War (2022-)"
+            res = ensure_folder_year(
+                r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War\Season 3 - The Calamity",
+                anime_title="Bleach Thousand-Year Blood War - The Calamity",
+                client=mock_client
+            )
+            self.assertEqual(res, r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War (2022-)\Season 3 - The Calamity")
+            mock_rename.assert_called_once_with(r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War", r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War (2022-)")
+            mock_db_rename.assert_called_once_with(r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War", r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War (2022-)")
+
 if __name__ == "__main__":
     unittest.main()
+
+
+

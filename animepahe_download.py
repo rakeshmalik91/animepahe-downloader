@@ -74,7 +74,7 @@ if config.FORCE_IPV4:
         return socket.AF_INET
     urllib3_conn.allowed_gai_family = allowed_gai_family
 
-from modules.utils import log_debug, normalize_path, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror, prompt_user
+from modules.utils import log_debug, normalize_path, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror, prompt_user, ensure_folder_year, format_anime_folder_name, is_season_folder_name, parse_year_tag
 from modules.db import init_db, get_folder_by_id, get_tracked, save_tracked, cleanup_db
 from modules.scraper import search_anime
 from modules.processor import process_one_folder
@@ -91,6 +91,9 @@ def main(cli_args=None):
     parser.add_argument("--all-seasons", action="store_true", help="Search and optionally download all seasons/movies for the given name")
     parser.add_argument("--more-seasons", action="store_true", help="Scan existing folders for new untracked seasons")
     parser.add_argument("--new-seasons", action="store_true", help="Scan existing folders and ONLY look for newer seasons based on season number or release year fallback")
+    parser.add_argument("--add-years", action="store_true", help="Scan library and add release year tag to anime folders if missing")
+    parser.add_argument("--year-tags", dest="enable_year_tags", action="store_true", default=None, help="Enable appending release year tags to anime folders")
+    parser.add_argument("--no-year-tags", dest="enable_year_tags", action="store_false", help="Disable appending release year tags to anime folders")
     parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts and auto-download")
     parser.add_argument("-ep", "--episodes", help="Specific episode(s) to download (e.g. 1,2,5-10)")
     parser.add_argument("--parallel", type=int, default=config.DEFAULT_PARALLEL_DOWNLOADS, help="Number of parallel episode downloads")
@@ -100,10 +103,36 @@ def main(cli_args=None):
     
     args = parser.parse_args(cli_args)
     
+    if args.enable_year_tags is not None:
+        config.ENABLE_YEAR_TAGS = args.enable_year_tags
+
+    
     if args.gui:
         import gui
         gui.main()
         return
+
+    if args.add_years:
+        tqdm.write(f"Formatting year tags for anime folders in: {config.BASE_DOWNLOAD_DIR}", file=sys.stdout)
+        client = httpx.Client(timeout=15, follow_redirects=True)
+        try:
+            if os.path.exists(config.BASE_DOWNLOAD_DIR):
+                dirs = [d for d in os.listdir(config.BASE_DOWNLOAD_DIR) if os.path.isdir(os.path.join(config.BASE_DOWNLOAD_DIR, d))]
+                count = 0
+                for d in dirs:
+                    if is_season_folder_name(d):
+                        continue
+                    folder_path = os.path.join(config.BASE_DOWNLOAD_DIR, d)
+                    tracked = get_tracked(folder_path)
+                    aid, title = (tracked[0], tracked[1]) if tracked else (None, None)
+                    new_path = ensure_folder_year(folder_path, anime_title=title or d, anime_id=aid, client=client)
+                    if new_path != folder_path:
+                        count += 1
+                tqdm.write(f"Done. Updated {count} anime folder(s) with release year tags.", file=sys.stdout)
+        finally:
+            client.close()
+        return
+
     
     if args.skip_folder:
         target_path = os.path.abspath(os.path.join(config.BASE_DOWNLOAD_DIR, args.skip_folder))

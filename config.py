@@ -57,9 +57,13 @@ DOWNLOAD_SEGMENTS = 4
 SLOW_DOWNLOAD_THRESHOLD_KBPS = 500      # Fallback to normal download if speed drops below this
 DEFAULT_PARALLEL_DOWNLOADS = 2          # Number of concurrent episode downloads
 
+# Folder naming settings
+ENABLE_YEAR_TAGS = True                 # Append release year to top-level anime folder names
+
 # Accessibility settings
 ENABLE_NOTIFICATIONS = True
 AUTO_RUN_SCANNER_ON_STARTUP = False
+
 
 # Database for tracking
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tracking.db")

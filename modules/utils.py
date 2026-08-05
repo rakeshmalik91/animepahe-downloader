@@ -317,3 +317,226 @@ def send_windows_notification(title, message, folder_path=None):
     except Exception as e:
         log_debug(f"Failed to send notification: {e}")
 
+def is_season_folder_name(name):
+    """
+    Returns True if the given folder name represents a season, part, cour, OVA, special, or movie subfolder.
+    """
+    if not name:
+        return False
+    # Strip any trailing year tag if accidentally present (e.g. "Season 1 (2020)")
+    clean_name = re.sub(r'\s*\(\d{4}(?:-\d{4}|-)?\)$', '', name.strip())
+    
+    patterns = [
+        r'^(?:Season|S|Part|Cour)\s*\d+$',
+        r'^\d+(?:st|nd|rd|th)\s*Season$',
+        r'^(?:Season|S)\s*\d+(?:\s*(?:Part|Cour)\s*\d+)?$',
+        r'^(?:Part|Cour)\s*\d+$',
+        r'^(?:OVA|OVAs|Special|Specials|Movie|Movies)$'
+    ]
+    return any(re.match(p, clean_name, re.IGNORECASE) for p in patterns)
+
+def parse_year_tag(start_year, end_year=None, status=None, is_ongoing=False):
+    """
+    Format year tag string:
+    - (2020)
+    - (2020-2024)
+    - (2020-)
+    """
+    if not start_year:
+        return ""
+    try:
+        sy = int(start_year)
+    except (ValueError, TypeError):
+        return ""
+        
+    ey = None
+    if end_year:
+        try:
+            ey = int(end_year)
+        except (ValueError, TypeError):
+            ey = None
+            
+    ongoing = is_ongoing
+    if status and isinstance(status, str):
+        st_lower = status.lower()
+        if any(x in st_lower for x in ['currently airing', 'releasing', 'ongoing']):
+            ongoing = True
+            
+    if ongoing and (ey is None or ey >= datetime.now().year):
+        return f"({sy}-)"
+    elif ey and ey != sy:
+        return f"({sy}-{ey})"
+    else:
+        return f"({sy})"
+
+def format_anime_folder_name(folder_name, year_tag=""):
+    """
+    Appends year_tag at end of anime folder name if not already there.
+    Ensures year_tag is NOT added to season folders (and strips year from season folders if present).
+    """
+    if not folder_name:
+        return folder_name
+        
+    folder_name = folder_name.strip()
+    
+    # If folder is a season folder (e.g. "Season 1"), never add year and strip year if present
+    if is_season_folder_name(folder_name):
+        return re.sub(r'\s*\(\d{4}(?:-\d{4}|-)?\)$', '', folder_name).strip()
+        
+    if not year_tag:
+        return folder_name
+        
+    year_tag = year_tag.strip()
+    
+    # Check if folder_name already ends with a valid year tag format: (2020), (2020-2024), (2020-)
+    if re.search(r'\(\d{4}(?:-\d{4}|-)?\)$', folder_name):
+        return folder_name
+        
+    return f"{folder_name} {year_tag}".strip()
+
+def get_anime_parent_folder(folder_path):
+    """
+    Finds the main anime directory path for folder_path.
+    """
+    if not folder_path:
+        return folder_path
+        
+    base = os.path.abspath(getattr(config, 'BASE_DOWNLOAD_DIR', ''))
+    folder_abs = os.path.abspath(folder_path)
+    
+    if not base or not folder_abs.startswith(base + os.sep):
+        if is_season_folder_name(os.path.basename(folder_abs)):
+            return os.path.dirname(folder_abs)
+        return folder_abs
+        
+    rel = folder_abs[len(base):].strip('\\/')
+    parts = [p for p in rel.split(os.sep) if p]
+    
+    if len(parts) >= 2 and is_season_folder_name(parts[-1]):
+        return os.path.dirname(folder_abs)
+    elif len(parts) >= 2:
+        return os.path.join(base, parts[0])
+    else:
+        return folder_abs
+
+def ensure_folder_year(folder_path, anime_title=None, anime_id=None, meta=None, client=None):
+    """
+    Renames top-level anime folder to include release year tag (starting year) at the end if missing or incorrect.
+    Ensures season folders do NOT have year tag appended (and strips year from season folders if present).
+    Returns updated folder_path.
+    """
+    if not folder_path or not os.path.exists(folder_path):
+        return folder_path
+
+    if not getattr(config, 'ENABLE_YEAR_TAGS', True):
+        return folder_path
+
+    # Clean season folder name if it accidentally has a year tag attached
+
+    folder_name = os.path.basename(folder_path)
+    parent_dir = os.path.dirname(folder_path)
+    if is_season_folder_name(folder_name):
+        clean_season_name = format_anime_folder_name(folder_name, "")
+        if clean_season_name != folder_name:
+            new_season_path = os.path.join(parent_dir, clean_season_name)
+            if not os.path.exists(new_season_path):
+                try:
+                    os.rename(folder_path, new_season_path)
+                    from .db import rename_tracked_folder
+                    rename_tracked_folder(folder_path, new_season_path)
+                    folder_path = new_season_path
+                except Exception as e:
+                    log_debug(f"Error cleaning season folder name: {e}")
+
+    target_anime_folder = get_anime_parent_folder(folder_path)
+    if not os.path.exists(target_anime_folder):
+        return folder_path
+
+    anime_folder_name = os.path.basename(target_anime_folder)
+    anime_parent_dir = os.path.dirname(target_anime_folder)
+
+    # Clean base anime title by removing any existing year tag: e.g. "Bleach Thousand-Year Blood War (2026-)" -> "Bleach Thousand-Year Blood War"
+    clean_anime_title = re.sub(r'\s*\(\d{4}(?:-\d{4}|-)?\)$', '', anime_folder_name).strip()
+
+    years = []
+    is_ongoing = False
+
+    # 1. From meta if provided
+    if meta:
+        if meta.get('year'):
+            try: years.append(int(meta.get('year')))
+            except (ValueError, TypeError): pass
+        if meta.get('status'):
+            st = str(meta.get('status')).lower()
+            if any(x in st for x in ['currently airing', 'releasing', 'ongoing']):
+                is_ongoing = True
+
+    # 2. Search AnimePahe API for all entries matching the base anime title to get franchise years
+    if client:
+        query_title = anime_title or clean_anime_title
+        query_clean = re.sub(r'\s*\(\d{4}[^)]*\)', '', query_title).strip()
+        query_clean = query_clean.replace('：', ' ').replace(':', ' ')
+        try:
+            from .scraper import search_anime
+            results, api_ok = search_anime(client, query_clean, return_all=True)
+            if results:
+                for r_aid, r_clean, r_title, r_meta in results:
+                    if r_meta and r_meta.get('year'):
+                        try: years.append(int(r_meta.get('year')))
+                        except (ValueError, TypeError): pass
+                    if r_meta and r_meta.get('status'):
+                        st = str(r_meta.get('status')).lower()
+                        if any(x in st for x in ['currently airing', 'releasing', 'ongoing']):
+                            is_ongoing = True
+        except Exception as e:
+            log_debug(f"Search API year fetch error: {e}")
+
+    # 3. Check physical subfolders for year indicators
+    try:
+        for sub in os.listdir(target_anime_folder):
+            m_sub_y = re.search(r'\b(19|20)\d{2}\b', sub)
+            if m_sub_y:
+                years.append(int(m_sub_y.group(0)))
+    except Exception:
+        pass
+
+    # 4. Extract year from title string if available
+    if anime_title:
+        m_title_y = re.findall(r'\b(19|20)\d{2}\b', anime_title)
+        for y_str in m_title_y:
+            years.append(int(y_str))
+
+    if not years:
+        return folder_path
+
+    start_year = min(years)
+    latest_year = max(years)
+
+    year_tag = parse_year_tag(start_year, latest_year if not is_ongoing else None, is_ongoing=is_ongoing)
+    if not year_tag:
+        return folder_path
+
+    new_anime_folder_name = f"{clean_anime_title} {year_tag}".strip()
+    if new_anime_folder_name != anime_folder_name:
+        new_anime_path = os.path.join(anime_parent_dir, new_anime_folder_name)
+        if not os.path.exists(new_anime_path):
+            try:
+                os.rename(target_anime_folder, new_anime_path)
+                from .db import rename_tracked_folder
+                rename_tracked_folder(target_anime_folder, new_anime_path)
+                log_debug(f"Renamed anime folder with correct year tag: '{anime_folder_name}' -> '{new_anime_folder_name}'")
+                
+                if os.path.abspath(folder_path) == os.path.abspath(target_anime_folder):
+                    return new_anime_path
+                else:
+                    rel_sub = os.path.relpath(folder_path, target_anime_folder)
+                    return os.path.join(new_anime_path, rel_sub)
+            except Exception as e:
+                log_debug(f"Error renaming anime folder: {e}")
+
+    return folder_path
+
+
+
+
+

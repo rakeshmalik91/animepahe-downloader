@@ -14,7 +14,7 @@ import threading
 from datetime import datetime
 import config
 
-from .utils import log_debug, detect_lang_from_files, get_latest_episode_local, is_episode_already_present, send_windows_notification, ensure_working_mirror, prompt_user
+from .utils import log_debug, detect_lang_from_files, get_latest_episode_local, is_episode_already_present, send_windows_notification, ensure_working_mirror, prompt_user, ensure_folder_year, format_anime_folder_name, is_season_folder_name
 from .db import update_last_checked, save_tracked, get_tracked
 from .scraper import search_anime, get_direct_link, resolve_kwik_direct
 from .downloader import download_file
@@ -60,6 +60,9 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                     anime_title = re.sub(r'\s+', ' ', anime_title).strip()
         except: pass
         if not anime_title: anime_title = os.path.basename(folder_path)
+
+    folder_path = ensure_folder_year(folder_path, anime_title=anime_title, anime_id=anime_id, client=client)
+
 
     last_ep = get_latest_episode_local(folder_path) or 0
     try:

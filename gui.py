@@ -593,11 +593,15 @@ class AnimePaheGUI:
         self.cfg_auto_scan_var = tk.BooleanVar(value=getattr(config, 'AUTO_RUN_SCANNER_ON_STARTUP', False))
         ttk.Checkbutton(col1, text="Run scanner on GUI startup", variable=self.cfg_auto_scan_var).pack(anchor=tk.W, pady=1)
 
+        self.cfg_year_tags_var = tk.BooleanVar(value=getattr(config, 'ENABLE_YEAR_TAGS', True))
+        ttk.Checkbutton(col1, text="Append release year to anime folders", variable=self.cfg_year_tags_var).pack(anchor=tk.W, pady=1)
+
         self.cfg_browser_fail_var = tk.BooleanVar(value=getattr(config, 'OPEN_BROWSER_ON_FAIL', False))
         ttk.Checkbutton(col2, text="Open browser on download fail", variable=self.cfg_browser_fail_var).pack(anchor=tk.W, pady=1)
 
         self.cfg_segmented_var = tk.BooleanVar(value=getattr(config, 'ENABLE_SEGMENTED_DOWNLOAD', True))
         ttk.Checkbutton(col2, text="Enable Segmented downloads", variable=self.cfg_segmented_var).pack(anchor=tk.W, pady=1)
+
 
         # Save & Actions Button Bar
         btn_bar = ttk.Frame(settings_card)
@@ -1366,6 +1370,7 @@ class AnimePaheGUI:
             config.AUTO_RUN_SCANNER_ON_STARTUP = self.cfg_auto_scan_var.get()
             config.OPEN_BROWSER_ON_FAIL = self.cfg_browser_fail_var.get()
             config.ENABLE_SEGMENTED_DOWNLOAD = self.cfg_segmented_var.get()
+            config.ENABLE_YEAR_TAGS = self.cfg_year_tags_var.get()
             config.DOWNLOAD_SEGMENTS = self.cfg_segments_var.get()
             config.MAX_DISTANCE_THRESHOLD = self.cfg_distance_var.get()
 
@@ -1378,8 +1383,10 @@ class AnimePaheGUI:
             save_setting("AUTO_RUN_SCANNER_ON_STARTUP", config.AUTO_RUN_SCANNER_ON_STARTUP)
             save_setting("OPEN_BROWSER_ON_FAIL", config.OPEN_BROWSER_ON_FAIL)
             save_setting("ENABLE_SEGMENTED_DOWNLOAD", config.ENABLE_SEGMENTED_DOWNLOAD)
+            save_setting("ENABLE_YEAR_TAGS", config.ENABLE_YEAR_TAGS)
             save_setting("DOWNLOAD_SEGMENTS", config.DOWNLOAD_SEGMENTS)
             save_setting("MAX_DISTANCE_THRESHOLD", config.MAX_DISTANCE_THRESHOLD)
+
 
             messagebox.showinfo("Settings Saved", "Settings successfully saved to database!")
         except Exception as e:
