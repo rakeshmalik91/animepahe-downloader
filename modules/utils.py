@@ -46,13 +46,40 @@ def log_debug(msg):
     except Exception:
         pass
 
-def load_animepahe_session_to_client(client):
+_mirror_update_callbacks = []
+
+def register_mirror_callback(cb):
+    if cb not in _mirror_update_callbacks:
+        _mirror_update_callbacks.append(cb)
+
+def unregister_mirror_callback(cb):
+    if cb in _mirror_update_callbacks:
+        _mirror_update_callbacks.remove(cb)
+
+def notify_mirror_update(site_type, is_ok, url=None):
+    for cb in _mirror_update_callbacks:
+        try:
+            cb(site_type, is_ok, url)
+        except Exception:
+            pass
+
+def load_animepahe_session_to_client(client, target_domain=None):
     try:
         from .db import get_animepahe_session
         cookies, ua = get_animepahe_session()
         if cookies:
             for c in cookies:
-                client.cookies.set(c['name'], c['value'], domain=c.get('domain'))
+                domain = c.get('domain')
+                try:
+                    client.cookies.set(c['name'], c['value'], domain=domain)
+                except Exception:
+                    pass
+                if target_domain:
+                    try:
+                        clean_target = target_domain.lstrip('.')
+                        client.cookies.set(c['name'], c['value'], domain=clean_target)
+                    except Exception:
+                        pass
             log_debug("Loaded cached AnimePahe session cookies.")
         if ua:
             client.headers.update({"User-Agent": ua})
@@ -122,6 +149,13 @@ def _ensure_working_site_mirror(client, site_type, verbose=False):
     first_cf_blocked_mirror = None
     for mirror in ordered_mirrors:
         try:
+            if site_type == "animepahe":
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(mirror).netloc
+                    load_animepahe_session_to_client(client, target_domain=host)
+                except Exception:
+                    pass
             if verbose: tqdm.write(f" - {mirror.replace('https://', '')}...", end=' ', file=sys.stdout)
             headers = {
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -173,6 +207,7 @@ def _ensure_working_site_mirror(client, site_type, verbose=False):
                 
                 log_debug(f"Selected working {display_name} mirror: {final_url} (was {mirror})")
                 working_mirror_found = True
+                notify_mirror_update(site_type, True, final_url)
                 return True
             else:
                 if verbose: tqdm.write(f"FAIL ({res.status_code})", file=sys.stdout)
@@ -190,7 +225,9 @@ def _ensure_working_site_mirror(client, site_type, verbose=False):
             cookies, ua, _ = get_browser_cookies(bypass_target)
             if cookies and ua:
                 save_animepahe_session(cookies, ua)
-                load_animepahe_session_to_client(client)
+                from urllib.parse import urlparse
+                host = urlparse(bypass_target).netloc
+                load_animepahe_session_to_client(client, target_domain=host)
                 
                 tqdm.write(f" - {bypass_target.replace('https://', '')} (after bypass)...", end=' ', file=sys.stdout)
                 headers = {
@@ -204,12 +241,14 @@ def _ensure_working_site_mirror(client, site_type, verbose=False):
                     save_working_mirror("animepahe", bypass_target)
                     config.ANIMEPAHE_URL = bypass_target
                     log_debug(f"Selected working AnimePahe mirror after bypass: {bypass_target}")
+                    notify_mirror_update(site_type, True, bypass_target)
                     return True
                 else:
                     if verbose: tqdm.write(f"FAIL ({res.status_code})", file=sys.stdout)
         except Exception as e:
             log_debug(f"AnimePahe browser bypass failed: {e}")
             
+    notify_mirror_update(site_type, False, None)
     return False
 
 def normalize_path(path):

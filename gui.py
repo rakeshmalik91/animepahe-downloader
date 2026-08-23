@@ -25,7 +25,7 @@ from datetime import datetime
 # Local imports
 import config
 from modules.db import init_db, get_tracked, save_tracked, save_setting, get_setting, clear_sessions
-from modules.utils import set_prompt_handler, log_debug, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror, ensure_working_anilist_mirror, ensure_working_kitsu_mirror
+from modules.utils import set_prompt_handler, log_debug, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror, ensure_working_anilist_mirror, ensure_working_kitsu_mirror, register_mirror_callback
 from modules.browser_embed import register_container_hwnd, resize_current_embedded
 import animepahe_download
 
@@ -174,8 +174,11 @@ class AnimePaheGUI:
         # Start log queue polling
         self.root.after(100, self.poll_log_queue)
 
+        # Register real-time mirror update callback
+        register_mirror_callback(self._on_mirror_status_changed)
+
         # Initial Mirror Check in Background
-        threading.Thread(target=self.check_mirrors_background, daemon=True).start()
+        self.trigger_mirror_check()
 
         # Auto-run scanner on startup if enabled in config
         if getattr(config, 'AUTO_RUN_SCANNER_ON_STARTUP', False):
@@ -332,7 +335,8 @@ class AnimePaheGUI:
         self.lbl_kt_status.pack(side=tk.LEFT, padx=2)
         self.lbl_kt_status.bind("<Button-1>", lambda e: self.show_mirror_details_popup())
 
-        ttk.Button(self.mirror_badge_frame, text="🔄 Check", command=lambda: threading.Thread(target=self.check_mirrors_background, daemon=True).start()).pack(side=tk.LEFT, padx=3)
+        self.btn_check_mirrors = ttk.Button(self.mirror_badge_frame, text="🔄 Check", command=self.trigger_mirror_check)
+        self.btn_check_mirrors.pack(side=tk.LEFT, padx=3)
 
         # Notebook Container
         self.notebook = ttk.Notebook(self.root)
@@ -796,11 +800,11 @@ class AnimePaheGUI:
             header_row = ttk.Frame(bar_frame)
             header_row.pack(fill=tk.X)
 
-            lbl_t = ttk.Label(header_row, text=f"{title} ({pct}%)", font=("Segoe UI", 9, "bold"), foreground="#a6e3a1")
-            lbl_t.pack(side=tk.LEFT)
-
             lbl_s = ttk.Label(header_row, text=stats, font=("Segoe UI", 9, "bold"), foreground="#a6e3a1")
-            lbl_s.pack(side=tk.RIGHT)
+            lbl_s.pack(side=tk.RIGHT, padx=(8, 0))
+
+            lbl_t = ttk.Label(header_row, text=f"{title} ({pct}%)", font=("Segoe UI", 9, "bold"), foreground="#a6e3a1")
+            lbl_t.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
             pbar = ttk.Progressbar(bar_frame, orient=tk.HORIZONTAL, mode="determinate", maximum=100, style="Green.Horizontal.TProgressbar")
             pbar.pack(fill=tk.X, pady=(2, 0))
@@ -912,6 +916,97 @@ class AnimePaheGUI:
         details = getattr(self, 'mirror_details_text', "No mirror check performed yet. Click 'Check' to refresh.")
         messagebox.showinfo("Mirror Availability Details", f"Active Server Endpoints:\n\n{details}")
 
+    def trigger_mirror_check(self):
+        self._set_mirror_checking_ui()
+        threading.Thread(target=self.check_mirrors_background, daemon=True).start()
+
+    def _set_mirror_checking_ui(self):
+        if hasattr(self, 'btn_check_mirrors'):
+            self.btn_check_mirrors.config(state="disabled")
+        badges = [
+            (self.lbl_ap_status, "AnimePahe: ⏳ Checking..."),
+            (self.lbl_kw_status, "Kwik: ⏳ Checking..."),
+            (self.lbl_jk_status, "Jikan: ⏳"),
+            (self.lbl_al_status, "AniList: ⏳"),
+            (self.lbl_kt_status, "Kitsu: ⏳")
+        ]
+        for lbl, txt in badges:
+            lbl.config(text=txt, bg="#313244", fg="#cdd6f4")
+
+    def _on_mirror_status_changed(self, site_type, is_ok, url=None):
+        """Called automatically whenever a mirror is verified or bypassed anywhere in the engine."""
+        def update():
+            domain = url.replace('https://', '').replace('http://', '').strip('/') if url else None
+            if not domain:
+                if site_type == "animepahe":
+                    domain = getattr(config, 'ANIMEPAHE_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+                elif site_type == "kwik":
+                    domain = getattr(config, 'KWIK_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+                elif site_type == "jikan":
+                    domain = getattr(config, 'JIKAN_API_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+                elif site_type == "anilist":
+                    domain = getattr(config, 'ANILIST_API_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+                elif site_type == "kitsu":
+                    domain = getattr(config, 'KITSU_API_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+
+            if site_type == "animepahe":
+                self.lbl_ap_status.config(
+                    text=f"AnimePahe: {domain}" if is_ok else "AnimePahe: ✖ Down",
+                    bg="#1e3a29" if is_ok else "#4a1d24",
+                    fg="#a6e3a1" if is_ok else "#f38ba8"
+                )
+            elif site_type == "kwik":
+                self.lbl_kw_status.config(
+                    text=f"Kwik: {domain}" if is_ok else "Kwik: ✖ Down",
+                    bg="#1e3a29" if is_ok else "#4a1d24",
+                    fg="#a6e3a1" if is_ok else "#f38ba8"
+                )
+            elif site_type == "jikan":
+                self.lbl_jk_status.config(
+                    text="Jikan: ✔" if is_ok else "Jikan: ✖",
+                    bg="#1e3a29" if is_ok else "#4a1d24",
+                    fg="#a6e3a1" if is_ok else "#f38ba8"
+                )
+            elif site_type == "anilist":
+                self.lbl_al_status.config(
+                    text="AniList: ✔" if is_ok else "AniList: ✖",
+                    bg="#1e3a29" if is_ok else "#4a1d24",
+                    fg="#a6e3a1" if is_ok else "#f38ba8"
+                )
+            elif site_type == "kitsu":
+                self.lbl_kt_status.config(
+                    text="Kitsu: ✔" if is_ok else "Kitsu: ✖",
+                    bg="#1e3a29" if is_ok else "#4a1d24",
+                    fg="#a6e3a1" if is_ok else "#f38ba8"
+                )
+            self._update_mirror_details_text()
+
+        try:
+            self.root.after(0, update)
+        except Exception:
+            pass
+
+    def _update_mirror_details_text(self):
+        ap_domain = getattr(config, 'ANIMEPAHE_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+        kw_domain = getattr(config, 'KWIK_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+        jk_domain = getattr(config, 'JIKAN_API_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+        al_domain = getattr(config, 'ANILIST_API_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+        kt_domain = getattr(config, 'KITSU_API_URL', 'Down').replace('https://', '').replace('http://', '').strip('/')
+
+        ap_txt = self.lbl_ap_status.cget("text")
+        kw_txt = self.lbl_kw_status.cget("text")
+        jk_txt = self.lbl_jk_status.cget("text")
+        al_txt = self.lbl_al_status.cget("text")
+        kt_txt = self.lbl_kt_status.cget("text")
+
+        self.mirror_details_text = (
+            f"• AnimePahe: {'❌ Down' if ('Down' in ap_txt or '✖' in ap_txt) else ap_domain}\n"
+            f"• Kwik: {'❌ Down' if ('Down' in kw_txt or '✖' in kw_txt) else kw_domain}\n"
+            f"• Jikan: {'❌ Down' if '✖' in jk_txt else jk_domain}\n"
+            f"• AniList: {'❌ Down' if '✖' in al_txt else al_domain}\n"
+            f"• Kitsu: {'❌ Down' if '✖' in kt_txt else kt_domain}"
+        )
+
     def check_mirrors_background(self):
         try:
             import httpx
@@ -965,16 +1060,15 @@ class AnimePaheGUI:
                     fg="#a6e3a1" if kt_ok else "#f38ba8"
                 )
 
-                self.mirror_details_text = (
-                    f"• AnimePahe: {ap_domain if ap_ok else '❌ Down'}\n"
-                    f"• Kwik: {kw_domain if kw_ok else '❌ Down'}\n"
-                    f"• Jikan: {jk_domain if jk_ok else '❌ Down'}\n"
-                    f"• AniList: {al_domain if al_ok else '❌ Down'}\n"
-                    f"• Kitsu: {kt_domain if kt_ok else '❌ Down'}"
-                )
+                self._update_mirror_details_text()
+                if hasattr(self, 'btn_check_mirrors'):
+                    self.btn_check_mirrors.config(state="normal")
+
             self.root.after(0, update_labels)
         except Exception as e:
             log_debug(f"Mirror check failed: {e}")
+            if hasattr(self, 'btn_check_mirrors'):
+                self.root.after(0, lambda: self.btn_check_mirrors.config(state="normal"))
 
     # -------------------------------------------------------------------
     # Interactive Prompt Callback Handler (Thread Safe)
@@ -1129,6 +1223,7 @@ class AnimePaheGUI:
 
     def on_task_finished(self):
         self.refresh_treeview()
+        self._update_mirror_details_text()
         if not self.task_queue.empty():
             next_args, next_label = self.task_queue.get_nowait()
             self.append_log(f"\n▶️ Auto-starting next queued task: {next_label}\n")

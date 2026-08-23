@@ -94,7 +94,7 @@ def _segmented_download(url, filename, headers, total_size, segments, position=N
     success = False
     try:
         with tqdm(
-            desc=f"    [Seg] {os.path.basename(filename)[:34]}...",
+            desc=f"    [Seg] {os.path.basename(filename)}",
             initial=total_existing,
             total=total_size,
             unit='iB',
@@ -221,7 +221,7 @@ def download_file(url, filename, referer, position=None):
         r = session.get(url, headers=headers, stream=True, timeout=60)
         r.raise_for_status()
         with open(filename, fallback_mode) as f, tqdm(
-            desc=f"    {os.path.basename(filename)[:40]}...",
+            desc=f"    {os.path.basename(filename)}",
             initial=existing_size,
             total=total_size,
             unit='iB',
