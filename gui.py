@@ -786,9 +786,26 @@ class AnimePaheGUI:
         if not hasattr(self, 'active_progress_bars'):
             self.active_progress_bars = {}
 
+        # Canonical key ensures switching between segmented and non-segmented modes uses the same entry
+        canonical_key = re.sub(r'^\s*\[Seg\]\s*', '', key, flags=re.IGNORECASE).strip()
+        if not canonical_key:
+            canonical_key = key
+
+        # If an existing bar was stored under a variant key for this file, migrate it
+        if canonical_key not in self.active_progress_bars:
+            for existing_k in list(self.active_progress_bars.keys()):
+                if re.sub(r'^\s*\[Seg\]\s*', '', existing_k, flags=re.IGNORECASE).strip() == canonical_key:
+                    self.active_progress_bars[canonical_key] = self.active_progress_bars.pop(existing_k)
+                    break
+
+        key = canonical_key
+
         if key not in self.active_progress_bars:
             if len(self.active_progress_bars) == 0:
-                self.progress_frame.pack(fill=tk.X, side=tk.TOP, pady=(0, 4), before=self.text_frame)
+                try:
+                    self.progress_frame.pack(fill=tk.X, side=tk.TOP, pady=(0, 4), before=self.text_frame)
+                except Exception:
+                    self.progress_frame.pack(fill=tk.X, side=tk.TOP, pady=(0, 4))
 
             if len(self.active_progress_bars) >= 4:
                 oldest_key = list(self.active_progress_bars.keys())[0]
@@ -825,14 +842,38 @@ class AnimePaheGUI:
 
         if pct == 100:
             target_key = key
-            self.root.after(3000, lambda: self.remove_progress_bar(target_key))
+            def _check_and_remove():
+                if hasattr(self, 'active_progress_bars') and target_key in self.active_progress_bars:
+                    if self.active_progress_bars[target_key]["bar"]["value"] >= 100:
+                        self.remove_progress_bar(target_key)
+            self.root.after(3000, _check_and_remove)
 
     def remove_progress_bar(self, key):
-        if hasattr(self, 'active_progress_bars') and key in self.active_progress_bars:
-            item = self.active_progress_bars.pop(key)
-            item["frame"].destroy()
+        if not hasattr(self, 'active_progress_bars'):
+            return
+        canonical_key = re.sub(r'^\s*\[Seg\]\s*', '', key, flags=re.IGNORECASE).strip()
+        target_k = None
+        if key in self.active_progress_bars:
+            target_k = key
+        elif canonical_key in self.active_progress_bars:
+            target_k = canonical_key
+        else:
+            for k in list(self.active_progress_bars.keys()):
+                if re.sub(r'^\s*\[Seg\]\s*', '', k, flags=re.IGNORECASE).strip() == canonical_key:
+                    target_k = k
+                    break
+
+        if target_k and target_k in self.active_progress_bars:
+            item = self.active_progress_bars.pop(target_k)
+            try:
+                item["frame"].destroy()
+            except Exception:
+                pass
             if len(self.active_progress_bars) == 0:
-                self.progress_frame.pack_forget()
+                try:
+                    self.progress_frame.pack_forget()
+                except Exception:
+                    pass
 
     def clear_all_progress_bars(self):
         if hasattr(self, 'active_progress_bars'):
@@ -857,25 +898,29 @@ class AnimePaheGUI:
 
         if is_progress:
             lines = [l.strip() for l in clean_text.replace('\r', '\n').split('\n') if l.strip()]
-            if lines:
-                latest_line = lines[-1]
+            for line in lines:
+                pct_m = re.search(r'(\d+)%', line)
+                if not pct_m:
+                    continue
+                pct = int(pct_m.group(1))
 
-                pct_m = re.search(r'(\d+)%', latest_line)
-                pct = int(pct_m.group(1)) if pct_m else None
-
-                title_m = re.search(r'^(.*?):\s*\d+%', latest_line)
+                title_m = re.search(r'^(.*?):\s*\d+%', line)
                 if title_m:
                     title = title_m.group(1).strip()
-                elif "[" in latest_line and "]" in latest_line:
-                    title = latest_line.split("]")[0] + "]"
+                elif "[" in line and "]" in line:
+                    title = line.split("]")[0] + "]"
                 else:
                     title = "Downloading"
 
-                stats_m = re.search(r'(\d+\.?\d*[KMG]?i?B?/\d+\.?\d*[KMG]?i?B?.*)', latest_line)
+                stats_m = re.search(r'(\d+\.?\d*[KMG]?i?B?/\d+\.?\d*[KMG]?i?B?.*)', line)
                 stats = stats_m.group(1).strip() if stats_m else ""
 
-                if pct is not None:
-                    self.update_progress(title, pct, title, stats)
+                # Derive canonical key for tracking bar identity across segmented & non-segmented modes
+                canonical_key = re.sub(r'^\s*\[Seg\]\s*', '', title, flags=re.IGNORECASE).strip()
+                if not canonical_key:
+                    canonical_key = title
+
+                self.update_progress(canonical_key, pct, title, stats)
             # DO NOT insert progress bar text into log_text console!
             return
 
