@@ -128,11 +128,12 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
             "Accept": "application/json, text/javascript, */*; q=0.01"
         })
         
+        initial_status = res.status_code
         if res.status_code != 200:
             log_debug(f"Release API error (Status {res.status_code}). Attempting mirror rotation...")
             if res.status_code == 429:
                 retry_after = getattr(res, "headers", {}).get("Retry-After")
-                backoff = int(retry_after) if retry_after and retry_after.isdigit() else getattr(config, 'RATE_LIMIT_BACKOFF', 4)
+                backoff = int(retry_after) if retry_after and retry_after.isdigit() else getattr(config, 'RATE_LIMIT_BACKOFF', 5)
                 log_debug(f"Release API rate limited (429). Backing off for {backoff}s before retry/rotation...")
                 tqdm.write(f"  [Rate Limit] Release API returned 429. Backing off for {backoff}s...", file=sys.stdout)
                 time.sleep(backoff)
@@ -145,11 +146,23 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                     "X-Requested-With": "XMLHttpRequest",
                     "Accept": "application/json, text/javascript, */*; q=0.01"
                 })
+                if res.status_code == 429:
+                    retry_after = getattr(res, "headers", {}).get("Retry-After")
+                    backoff = int(retry_after) if retry_after and retry_after.isdigit() else getattr(config, 'RATE_LIMIT_BACKOFF', 5)
+                    log_debug(f"Release API retry rate limited (429). Backing off for {backoff}s...")
+                    tqdm.write(f"  [Rate Limit] Release API returned 429. Backing off for {backoff}s...", file=sys.stdout)
+                    time.sleep(backoff)
+                    res = client.get(api_url, headers={
+                        "Referer": anime_page_url,
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/json, text/javascript, */*; q=0.01"
+                    })
         
-        if res.status_code == 404:
+        if res.status_code == 404 or (initial_status == 404 and res.status_code != 200):
+            log_debug(f"Release API returned 404 for '{anime_title}' ({anime_id}). Searching for updated title/ID...")
             search_query = anime_title if anime_title else os.path.basename(folder_path)
             search_query = search_query.replace('：', ' ').replace(':', ' ')
-            scan_delay = getattr(config, 'REQUEST_DELAY', 0.5)
+            scan_delay = getattr(config, 'REQUEST_DELAY', 1.5)
             if scan_delay: time.sleep(scan_delay)
             new_id, new_title, _, dist = search_anime(client, search_query)
             if new_id and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
@@ -173,6 +186,16 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                     "X-Requested-With": "XMLHttpRequest",
                     "Accept": "application/json, text/javascript, */*; q=0.01"
                 })
+                if res.status_code == 429:
+                    retry_after = getattr(res, "headers", {}).get("Retry-After")
+                    backoff = int(retry_after) if retry_after and retry_after.isdigit() else getattr(config, 'RATE_LIMIT_BACKOFF', 5)
+                    tqdm.write(f"  [Rate Limit] Release API returned 429. Backing off for {backoff}s...", file=sys.stdout)
+                    time.sleep(backoff)
+                    res = client.get(api_url, headers={
+                        "Referer": anime_page_url,
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/json, text/javascript, */*; q=0.01"
+                    })
         
         if res.status_code != 200:
             tqdm.write(f"  Error: Could not reach API (Status {res.status_code}).", file=sys.stdout)
