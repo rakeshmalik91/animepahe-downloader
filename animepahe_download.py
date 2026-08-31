@@ -241,6 +241,8 @@ def main(cli_args=None):
             search_query = re.sub(r'(?i)\s+(720p|1080p|360p|SubsPlease|Dual-Audio|BD|Web-DL)', '', search_query).strip()
             search_query = re.sub(r'\[.*?\]|\(.*?\)', '', search_query).strip()
             
+            scan_delay = getattr(config, 'REQUEST_DELAY', 0.5)
+            if scan_delay: time.sleep(scan_delay)
             results, api_ok = search_anime(client, search_query, return_all=True)
             if not results: continue
             
@@ -545,6 +547,8 @@ def main(cli_args=None):
             if tracked:
                 aid, title, auto, _ = tracked
                 if auto == 1:
+                    scan_delay = getattr(config, 'REQUEST_DELAY', 0.5)
+                    if scan_delay: time.sleep(scan_delay)
                     success, final_aid, final_title = process_one_folder(client, folder_path, aid, title, args.quality, args.lang, episodes_filter=target_episodes, parallel=args.parallel)
                     if success and final_aid and final_title and (final_aid != aid or final_title != title):
                         save_tracked(folder_path, final_aid, final_title, True)
@@ -582,6 +586,8 @@ def main(cli_args=None):
                 if not search_query: continue
                 
                 rel_path = os.path.relpath(folder_path, config.BASE_DOWNLOAD_DIR)
+                scan_delay = getattr(config, 'REQUEST_DELAY', 0.5)
+                if scan_delay: time.sleep(scan_delay)
                 aid, title, api_ok, dist = search_anime(client, search_query)
                 dist_confirmed_url = False
                 if aid and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):

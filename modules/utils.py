@@ -86,10 +86,14 @@ def load_animepahe_session_to_client(client, target_domain=None):
     except Exception as e:
         log_debug(f"Failed to load AnimePahe session: {e}")
 
-def ensure_working_mirror(client, verbose=False):
+def ensure_working_mirror(client, verbose=False, exclude_mirror=None):
+    if exclude_mirror is not None:
+        return _ensure_working_site_mirror(client, "animepahe", verbose, exclude_mirror=exclude_mirror)
     return _ensure_working_site_mirror(client, "animepahe", verbose)
 
-def ensure_working_kwik_mirror(client, verbose=False):
+def ensure_working_kwik_mirror(client, verbose=False, exclude_mirror=None):
+    if exclude_mirror is not None:
+        return _ensure_working_site_mirror(client, "kwik", verbose, exclude_mirror=exclude_mirror)
     return _ensure_working_site_mirror(client, "kwik", verbose)
 
 def ensure_working_jikan_mirror(client, verbose=False):
@@ -101,7 +105,7 @@ def ensure_working_anilist_mirror(client, verbose=False):
 def ensure_working_kitsu_mirror(client, verbose=False):
     return _ensure_working_site_mirror(client, "kitsu", verbose)
 
-def _ensure_working_site_mirror(client, site_type, verbose=False):
+def _ensure_working_site_mirror(client, site_type, verbose=False, exclude_mirror=None):
     """Generic mirror checker for AnimePahe, Kwik, Jikan, AniList, or Kitsu."""
     from .db import get_last_working_mirror, save_working_mirror
     
@@ -144,6 +148,10 @@ def _ensure_working_site_mirror(client, site_type, verbose=False):
     for m in mirrors:
         if m not in ordered_mirrors:
             ordered_mirrors.append(m)
+
+    if exclude_mirror:
+        clean_exclude = exclude_mirror.rstrip('/')
+        ordered_mirrors = [m for m in ordered_mirrors if m.rstrip('/') != clean_exclude] + [m for m in ordered_mirrors if m.rstrip('/') == clean_exclude]
 
     working_mirror_found = False
     first_cf_blocked_mirror = None

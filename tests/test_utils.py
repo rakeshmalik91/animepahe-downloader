@@ -203,6 +203,31 @@ class TestUtils(unittest.TestCase):
         self.assertFalse(success)
         mock_save.assert_not_called()
 
+    @patch("modules.db.get_last_working_mirror", return_value=None)
+    @patch("modules.db.save_working_mirror")
+    def test_ensure_working_site_mirror_exclude_mirror(self, mock_save, mock_get_last):
+        mock_client = MagicMock()
+
+        def mock_get(url, **kwargs):
+            res = MagicMock()
+            if "animepahe.pw" in url:
+                res.status_code = 500
+            else:
+                res.status_code = 200
+                mock_url = MagicMock()
+                mock_url.scheme = "https"
+                mock_url.host = "animepahe.com"
+                mock_url.path = "/"
+                res.url = mock_url
+            return res
+
+        mock_client.get.side_effect = mock_get
+        config.ANIMEPAHE_URL = "https://animepahe.pw"
+
+        success = ensure_working_mirror(mock_client, verbose=False, exclude_mirror="https://animepahe.pw")
+        self.assertTrue(success)
+        self.assertEqual(config.ANIMEPAHE_URL, "https://animepahe.com")
+
     def test_parse_year_tag(self):
         from modules.utils import parse_year_tag
         self.assertEqual(parse_year_tag(2020), "(2020)")

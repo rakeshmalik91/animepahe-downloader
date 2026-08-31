@@ -56,7 +56,14 @@ class KwikDecoder:
             i += 1
         return gj
 
+_browser_lock = threading.Lock()
+
 def get_browser_cookies(url, extra_url=None):
+    """Thread-safe entry point to open browser for Cloudflare solve and extraction."""
+    with _browser_lock:
+        return _get_browser_cookies_unlocked(url, extra_url=extra_url)
+
+def _get_browser_cookies_unlocked(url, extra_url=None):
     """Helper to open a browser, solve Cloudflare, and extract the direct link.
     Returns (cookies, ua, resolved_url)
     """
@@ -145,26 +152,37 @@ def get_browser_cookies(url, extra_url=None):
         driver = uc.Chrome(options=options, version_main=version)
     except Exception as e:
         log_debug(f"uc.Chrome initialization failed: {e}")
-        # Fallback 1: Parse version mismatch from the exception message
-        match = re.search(r"Current browser version is (\d+)", str(e))
-        if match:
-            parsed_version = int(match.group(1))
-            log_debug(f"Parsed Chrome version {parsed_version} from error message. Retrying...")
+        err_str = str(e)
+        if "183" in err_str or isinstance(e, FileExistsError):
+            log_debug("Detected chromedriver file contention (WinError 183). Pausing 2s and retrying...")
+            time.sleep(2)
             try:
-                driver = uc.Chrome(options=options, version_main=parsed_version)
-            except Exception as e_inner:
-                log_debug(f"Retry with parsed version {parsed_version} failed: {e_inner}")
-                raise e_inner
-        else:
-            # Fallback 2: Try running with version_main=None if we haven't already
-            if version is not None:
-                log_debug("Retrying with version_main=None")
+                driver = uc.Chrome(options=options, version_main=version)
+                e = None
+            except Exception as e_retry:
+                e = e_retry
+                err_str = str(e)
+        if e is not None:
+            # Fallback 1: Parse version mismatch from the exception message
+            match = re.search(r"Current browser version is (\d+)", str(e))
+            if match:
+                parsed_version = int(match.group(1))
+                log_debug(f"Parsed Chrome version {parsed_version} from error message. Retrying...")
                 try:
-                    driver = uc.Chrome(options=options, version_main=None)
+                    driver = uc.Chrome(options=options, version_main=parsed_version)
                 except Exception as e_inner:
+                    log_debug(f"Retry with parsed version {parsed_version} failed: {e_inner}")
                     raise e_inner
             else:
-                raise e
+                # Fallback 2: Try running with version_main=None if we haven't already
+                if version is not None:
+                    log_debug("Retrying with version_main=None")
+                    try:
+                        driver = uc.Chrome(options=options, version_main=None)
+                    except Exception as e_inner:
+                        raise e_inner
+                else:
+                    raise e
     
     try:
         from modules.browser_embed import embed_chrome_driver, detach_current_embedded
@@ -183,8 +201,17 @@ def get_browser_cookies(url, extra_url=None):
                 break
             time.sleep(2)
         
-        # 2. Click the download button & wait for redirect (only for Kwik)
-        if "kwik" in url:
+        # 2. Click the download button & wait for redirect (for Kwik or redirectors)
+        if "kwik" not in driver.current_url and ("pahe.win" in url or "redirect" in url):
+            log_debug("Waiting for redirector to forward to Kwik...")
+            wait_kw = time.time()
+            while time.time() - wait_kw < 12:
+                if "kwik" in driver.current_url:
+                    log_debug(f"Redirected to Kwik: {driver.current_url}")
+                    break
+                time.sleep(1)
+
+        if "kwik" in url or "kwik" in driver.current_url:
             try:
                 log_debug("Looking for download button...")
                 wait = WebDriverWait(driver, 30)
@@ -454,7 +481,13 @@ def get_direct_link(client, anime_id, session, target_quality="720p", target_lan
         
         if res.status_code != 200:
             log_debug(f"Phase 1 failed with {res.status_code}. Attempting mirror rotation...")
-            if ensure_working_mirror(client):
+            if res.status_code == 429:
+                retry_after = getattr(res, "headers", {}).get("Retry-After")
+                backoff = int(retry_after) if retry_after and retry_after.isdigit() else getattr(config, 'RATE_LIMIT_BACKOFF', 4)
+                log_debug(f"Phase 1 rate limited (429). Backing off for {backoff}s before retry/rotation...")
+                time.sleep(backoff)
+            exclude = config.ANIMEPAHE_URL if res.status_code in (429, 500, 502, 503) else None
+            if ensure_working_mirror(client, exclude_mirror=exclude):
                 # Update URL and retry
                 play_url = f"{config.ANIMEPAHE_URL}/play/{anime_id}/{session}"
                 log_debug(f"Retrying Phase 1 with new mirror: {play_url}")
@@ -530,15 +563,42 @@ def get_direct_link(client, anime_id, session, target_quality="720p", target_lan
         if not selected_url: selected_url = lang_matches[0][0]
         
         log_debug(f"Phase 2: Resolving redirector {selected_url}")
-        res = scraper.get(selected_url, headers={"Referer": play_url}, timeout=20)
-        time.sleep(config.REDIRECT_WAIT_TIME) 
-        
-        kwik_match = re.search(r'https?://kwik\.[^/]+/[^"\'\s>]+', res.text)
+        res = None
+        # Try curl_cffi first as it bypasses modern Cloudflare TLS checks on pahe.win natively
+        try:
+            from curl_cffi import requests as curl_requests
+            curl_session = curl_requests.Session(impersonate="chrome124")
+            res_curl = curl_session.get(selected_url, headers={"Referer": play_url}, timeout=20)
+            if res_curl.status_code == 200:
+                res = res_curl
+                log_debug(f"Phase 2 (curl_cffi) status: {res.status_code}")
+        except Exception as e_curl:
+            log_debug(f"Phase 2 curl_cffi error: {e_curl}")
+            
+        if not res or res.status_code != 200:
+            try:
+                res = scraper.get(selected_url, headers={"Referer": play_url}, timeout=20)
+                log_debug(f"Phase 2 (scraper) status: {getattr(res, 'status_code', None)}")
+            except Exception as e_scraper:
+                log_debug(f"Phase 2 scraper error: {e_scraper}")
+                
         kwik_result = None
-        if kwik_match:
-            kwik_result = resolve_kwik_direct(kwik_match.group(0), selected_url, retry_with_browser=retry_with_browser)
-        elif "kwik" in res.url:
-            kwik_result = resolve_kwik_direct(res.url, selected_url, retry_with_browser=retry_with_browser)
+        kwik_match = None
+        if res:
+            kwik_match = re.search(r'https?://kwik\.[^/]+/[^"\'\s>]+', getattr(res, "text", ""))
+            if kwik_match:
+                log_debug(f"Phase 2 found Kwik URL: {kwik_match.group(0)}")
+                kwik_result = resolve_kwik_direct(kwik_match.group(0), selected_url, retry_with_browser=retry_with_browser)
+            elif "kwik" in getattr(res, "url", ""):
+                log_debug(f"Phase 2 redirected to Kwik URL: {res.url}")
+                kwik_result = resolve_kwik_direct(res.url, selected_url, retry_with_browser=retry_with_browser)
+                
+        # If redirector is blocked headlessly and browser bypass is enabled, resolve in browser
+        if not kwik_result and retry_with_browser and getattr(config, "ENABLE_BROWSER_BYPASS", False):
+            log_debug("Phase 2: Redirector blocked headlessly. Attempting browser resolution...")
+            _, _, resolved_url = get_browser_cookies(selected_url)
+            if resolved_url:
+                kwik_result = resolved_url
         
         if kwik_result:
             return kwik_result, actual_lang, available_langs
@@ -605,7 +665,13 @@ def search_anime(client, query, return_all=False):
         })
         if res.status_code != 200:
             log_debug(f"Search API error (Status {res.status_code}). Attempting mirror rotation...")
-            if ensure_working_mirror(client):
+            if res.status_code == 429:
+                retry_after = getattr(res, "headers", {}).get("Retry-After")
+                backoff = int(retry_after) if retry_after and retry_after.isdigit() else getattr(config, 'RATE_LIMIT_BACKOFF', 4)
+                log_debug(f"Search API rate limited (429). Backing off for {backoff}s before retry/rotation...")
+                time.sleep(backoff)
+            exclude = config.ANIMEPAHE_URL if res.status_code in (429, 500, 502, 503) else None
+            if ensure_working_mirror(client, exclude_mirror=exclude):
                  search_url = f"{config.ANIMEPAHE_URL}/api?m=search&q={query}"
                  log_debug(f"Retrying search with new mirror: {search_url}")
                  res = client.get(search_url, headers={
@@ -622,6 +688,8 @@ def search_anime(client, query, return_all=False):
                 log_debug("Search API returned non-JSON (DDoS-Guard?).")
         else:
             log_debug(f"Search API error (Status {res.status_code})")
+            if res.status_code == 429:
+                time.sleep(getattr(config, 'RATE_LIMIT_BACKOFF', 4))
     except Exception as e:
         log_debug(f"Search API exception: {e}")
     

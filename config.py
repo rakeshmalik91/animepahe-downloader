@@ -46,10 +46,12 @@ MAX_DISTANCE_THRESHOLD = 20             # Max allowed Levenshtein distance befor
 # Cloudflare bypass cookies for Kwik downloads are now stored automatically in the database.
 # To trigger a refresh, simply wait for a 403 or delete the 'sessions' table in tracking.db.
 
-# Retry settings
+# Retry & rate limiting settings
 MAX_DOWNLOAD_RETRIES = 5               # Auto retry this many times before prompting user
 DOWNLOAD_RETRY_BASE_DELAY = 2           # Base seconds to wait before retrying
 DOWNLOAD_RETRY_MULTIPLIER = 2           # Multiplier for exponential backoff (e.g. 2, 4, 8)
+REQUEST_DELAY = 0.5                     # Seconds to pause between consecutive search/scan requests
+RATE_LIMIT_BACKOFF = 4                  # Default seconds to back off when receiving HTTP 429
 
 # Segmented download settings
 ENABLE_SEGMENTED_DOWNLOAD = True

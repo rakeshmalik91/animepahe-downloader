@@ -506,5 +506,28 @@ class TestScraper(unittest.TestCase):
         self.assertEqual(results[0][1], "Witch Hat Atelier")
         self.assertTrue(api_ok)
 
+    @patch("time.sleep")
+    @patch("modules.scraper.ensure_working_mirror", return_value=True)
+    def test_search_anime_429_rate_limit_backoff(self, mock_mirror, mock_sleep):
+        mock_client = MagicMock()
+        mock_res_429 = MagicMock()
+        mock_res_429.status_code = 429
+        mock_res_429.headers = {"Retry-After": "2"}
+
+        mock_res_ok = MagicMock()
+        mock_res_ok.status_code = 200
+        mock_res_ok.json.return_value = {
+            "data": [
+                {"session": "sess_1", "title": "Frieren Beyond Journey's End", "type": "TV"}
+            ]
+        }
+        mock_client.get.side_effect = [mock_res_429, mock_res_ok]
+
+        anime_id, title, api_ok, dist = search_anime(mock_client, "Frieren")
+        self.assertEqual(anime_id, "sess_1")
+        self.assertTrue(api_ok)
+        mock_sleep.assert_called_with(2)
+        mock_mirror.assert_called_once_with(mock_client, exclude_mirror=config.ANIMEPAHE_URL)
+
 if __name__ == "__main__":
     unittest.main()

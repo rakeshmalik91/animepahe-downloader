@@ -130,7 +130,15 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
         
         if res.status_code != 200:
             log_debug(f"Release API error (Status {res.status_code}). Attempting mirror rotation...")
-            if ensure_working_mirror(client):
+            if res.status_code == 429:
+                retry_after = getattr(res, "headers", {}).get("Retry-After")
+                backoff = int(retry_after) if retry_after and retry_after.isdigit() else getattr(config, 'RATE_LIMIT_BACKOFF', 4)
+                log_debug(f"Release API rate limited (429). Backing off for {backoff}s before retry/rotation...")
+                tqdm.write(f"  [Rate Limit] Release API returned 429. Backing off for {backoff}s...", file=sys.stdout)
+                time.sleep(backoff)
+            exclude = config.ANIMEPAHE_URL if res.status_code in (429, 500, 502, 503) else None
+            if ensure_working_mirror(client, exclude_mirror=exclude):
+                anime_page_url = f"{config.ANIMEPAHE_URL}/anime/{anime_id}"
                 api_url = f"{config.ANIMEPAHE_URL}/api?m=release&id={anime_id}&sort=episode_desc&page=1"
                 res = client.get(api_url, headers={
                     "Referer": anime_page_url,
@@ -141,6 +149,8 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
         if res.status_code == 404:
             search_query = anime_title if anime_title else os.path.basename(folder_path)
             search_query = search_query.replace('：', ' ').replace(':', ' ')
+            scan_delay = getattr(config, 'REQUEST_DELAY', 0.5)
+            if scan_delay: time.sleep(scan_delay)
             new_id, new_title, _, dist = search_anime(client, search_query)
             if new_id and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
                 tqdm.write(f"  [Warning] Best match '{new_title}' has a high name distance from '{search_query}'.", file=sys.stdout)
