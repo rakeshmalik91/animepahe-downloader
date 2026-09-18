@@ -63,26 +63,40 @@ def notify_mirror_update(site_type, is_ok, url=None):
         except Exception:
             pass
 
+_mirror_check_lock = threading.Lock()
+
 def load_animepahe_session_to_client(client, target_domain=None):
+    """Loads cached Cloudflare session cookies and User-Agent from DB to the httpx client."""
+    from .db import get_animepahe_session
+    from urllib.parse import urlparse
     try:
-        from .db import get_animepahe_session
         cookies, ua = get_animepahe_session()
         if cookies:
+            target_domains = set()
+            if target_domain:
+                target_domains.add(target_domain.lstrip('.'))
+            for m in getattr(config, 'ANIMEPAHE_URLS', []):
+                try:
+                    target_domains.add(urlparse(m).netloc.lstrip('.'))
+                except Exception:
+                    pass
+
             for c in cookies:
                 domain = c.get('domain')
                 try:
                     client.cookies.set(c['name'], c['value'], domain=domain)
                 except Exception:
                     pass
-                if target_domain:
+                for td in target_domains:
                     try:
-                        clean_target = target_domain.lstrip('.')
-                        client.cookies.set(c['name'], c['value'], domain=clean_target)
+                        client.cookies.set(c['name'], c['value'], domain=td)
                     except Exception:
                         pass
             log_debug("Loaded cached AnimePahe session cookies.")
         if ua:
             client.headers.update({"User-Agent": ua})
+            if not getattr(config, 'USER_AGENT', None) or config.USER_AGENT != ua:
+                config.USER_AGENT = ua
     except Exception as e:
         log_debug(f"Failed to load AnimePahe session: {e}")
 
@@ -107,157 +121,196 @@ def ensure_working_kitsu_mirror(client, verbose=False):
 
 def _ensure_working_site_mirror(client, site_type, verbose=False, exclude_mirror=None):
     """Generic mirror checker for AnimePahe, Kwik, Jikan, AniList, or Kitsu."""
-    from .db import get_last_working_mirror, save_working_mirror
-    
-    if site_type == "animepahe":
-        load_animepahe_session_to_client(client)
-        # First priority: check database for last known working mirror
-        last_working = get_last_working_mirror("animepahe")
-        mirrors = config.ANIMEPAHE_URLS.copy()
-        current_url = getattr(config, "ANIMEPAHE_URL", last_working or mirrors[0])
-        display_name = "AnimePahe"
-    elif site_type == "jikan":
-        last_working = get_last_working_mirror("jikan")
-        mirrors = getattr(config, "JIKAN_API_URLS", ["https://api.jikan.moe/v4"]).copy()
-        current_url = getattr(config, "JIKAN_API_URL", last_working or mirrors[0])
-        display_name = "Jikan"
-    elif site_type == "anilist":
-        last_working = get_last_working_mirror("anilist")
-        mirrors = getattr(config, "ANILIST_API_URLS", ["https://graphql.anilist.co"]).copy()
-        current_url = getattr(config, "ANILIST_API_URL", last_working or mirrors[0])
-        display_name = "AniList"
-    elif site_type == "kitsu":
-        last_working = get_last_working_mirror("kitsu")
-        mirrors = getattr(config, "KITSU_API_URLS", ["https://kitsu.io/api/edge"]).copy()
-        current_url = getattr(config, "KITSU_API_URL", last_working or mirrors[0])
-        display_name = "Kitsu"
-    else:
-        last_working = get_last_working_mirror("kwik")
-        mirrors = config.KWIK_URLS.copy()
-        current_url = getattr(config, "KWIK_URL", last_working or mirrors[0])
-        display_name = "Kwik"
+    with _mirror_check_lock:
+        from .db import get_last_working_mirror, save_working_mirror
+        
+        if site_type == "animepahe":
+            load_animepahe_session_to_client(client)
+            # First priority: check database for last known working mirror
+            last_working = get_last_working_mirror("animepahe")
+            mirrors = config.ANIMEPAHE_URLS.copy()
+            current_url = getattr(config, "ANIMEPAHE_URL", last_working or mirrors[0])
+            display_name = "AnimePahe"
+        elif site_type == "jikan":
+            last_working = get_last_working_mirror("jikan")
+            mirrors = getattr(config, "JIKAN_API_URLS", ["https://api.jikan.moe/v4"]).copy()
+            current_url = getattr(config, "JIKAN_API_URL", last_working or mirrors[0])
+            display_name = "Jikan"
+        elif site_type == "anilist":
+            last_working = get_last_working_mirror("anilist")
+            mirrors = getattr(config, "ANILIST_API_URLS", ["https://graphql.anilist.co"]).copy()
+            current_url = getattr(config, "ANILIST_API_URL", last_working or mirrors[0])
+            display_name = "AniList"
+        elif site_type == "kitsu":
+            last_working = get_last_working_mirror("kitsu")
+            mirrors = getattr(config, "KITSU_API_URLS", ["https://kitsu.io/api/edge"]).copy()
+            current_url = getattr(config, "KITSU_API_URL", last_working or mirrors[0])
+            display_name = "Kitsu"
+        else:
+            last_working = get_last_working_mirror("kwik")
+            mirrors = config.KWIK_URLS.copy()
+            current_url = getattr(config, "KWIK_URL", last_working or mirrors[0])
+            display_name = "Kwik"
 
-    if verbose: tqdm.write(f"Checking {display_name} mirrors...", file=sys.stdout)
-    
-    # Priority order: current_url, last_working (if different), then others
-    ordered_mirrors = []
-    if current_url: ordered_mirrors.append(current_url)
-    if last_working and last_working not in ordered_mirrors:
-        ordered_mirrors.append(last_working)
-    
-    for m in mirrors:
-        if m not in ordered_mirrors:
-            ordered_mirrors.append(m)
+        if verbose: tqdm.write(f"Checking {display_name} mirrors...", file=sys.stdout)
+        
+        # Priority order: current_url, last_working (if different), then others
+        ordered_mirrors = []
+        if current_url: ordered_mirrors.append(current_url)
+        if last_working and last_working not in ordered_mirrors:
+            ordered_mirrors.append(last_working)
+        
+        for m in mirrors:
+            if m not in ordered_mirrors:
+                ordered_mirrors.append(m)
 
-    if exclude_mirror:
-        clean_exclude = exclude_mirror.rstrip('/')
-        ordered_mirrors = [m for m in ordered_mirrors if m.rstrip('/') != clean_exclude] + [m for m in ordered_mirrors if m.rstrip('/') == clean_exclude]
+        if exclude_mirror:
+            clean_exclude = exclude_mirror.rstrip('/')
+            ordered_mirrors = [m for m in ordered_mirrors if m.rstrip('/') != clean_exclude] + [m for m in ordered_mirrors if m.rstrip('/') == clean_exclude]
 
-    working_mirror_found = False
-    first_cf_blocked_mirror = None
-    for mirror in ordered_mirrors:
-        try:
-            if site_type == "animepahe":
-                try:
-                    from urllib.parse import urlparse
-                    host = urlparse(mirror).netloc
-                    load_animepahe_session_to_client(client, target_domain=host)
-                except Exception:
-                    pass
-            if verbose: tqdm.write(f" - {mirror.replace('https://', '')}...", end=' ', file=sys.stdout)
-            headers = {
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Referer": f"{mirror}/"
-            }
-            res = client.get(mirror, headers=headers, timeout=7)
-            
-            if res.status_code == 403 and site_type == "animepahe":
-                if not first_cf_blocked_mirror:
-                    first_cf_blocked_mirror = mirror
-                    
-            # AnimePahe returns 403 for Cloudflare challenges. We only accept status < 400.
-            is_ok = res.status_code < 400 if site_type == "animepahe" else res.status_code < 500
-            if is_ok:
-                if hasattr(res.url, 'scheme'):
-                    # httpx style
-                    path = getattr(res.url, 'path', '')
-                    final_url = f"{res.url.scheme}://{res.url.host}{path}".rstrip('/')
-                    host = res.url.host
-                else:
-                    # requests/cloudscraper style
-                    from urllib.parse import urlparse
-                    parsed = urlparse(res.url)
-                    final_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip('/')
-                    host = parsed.netloc
-
-                if verbose: 
-                    if final_url.rstrip('/') != mirror.rstrip('/'):
-                        tqdm.write(f"OK (redirected to {host})", file=sys.stdout)
-                    else:
-                        tqdm.write("OK", file=sys.stdout)
-                
-                # Save as working mirror in DB
-                save_working_mirror(site_type, mirror)
-                
+        working_mirror_found = False
+        first_cf_blocked_mirror = None
+        for mirror in ordered_mirrors:
+            try:
                 if site_type == "animepahe":
-                    config.ANIMEPAHE_URL = final_url
-                    client.cookies.set("__ddg2_", "", domain=host)
-                    client.headers.update({"Referer": f"{final_url}/"})
-                elif site_type == "jikan":
-                    config.JIKAN_API_URL = final_url
-                elif site_type == "anilist":
-                    config.ANILIST_API_URL = final_url
-                elif site_type == "kitsu":
-                    config.KITSU_API_URL = final_url
-                else:
-                    config.KWIK_URL = final_url
-                
-                log_debug(f"Selected working {display_name} mirror: {final_url} (was {mirror})")
-                working_mirror_found = True
-                notify_mirror_update(site_type, True, final_url)
-                return True
-            else:
-                if verbose: tqdm.write(f"FAIL ({res.status_code})", file=sys.stdout)
-        except Exception as e:
-            if verbose: tqdm.write("FAIL", file=sys.stdout)
-            log_debug(f"{display_name} mirror {mirror} failed: {e}")
-            continue
-    
-    if site_type == "animepahe" and not working_mirror_found:
-        bypass_target = first_cf_blocked_mirror or current_url
-        try:
-            from .scraper import get_browser_cookies
-            from .db import save_animepahe_session
-            tqdm.write(f"\nAll mirrors return 403. Opening browser to solve Cloudflare challenge...", file=sys.stdout)
-            cookies, ua, _ = get_browser_cookies(bypass_target)
-            if cookies and ua:
-                save_animepahe_session(cookies, ua)
-                from urllib.parse import urlparse
-                host = urlparse(bypass_target).netloc
-                load_animepahe_session_to_client(client, target_domain=host)
-                
-                tqdm.write(f" - {bypass_target.replace('https://', '')} (after bypass)...", end=' ', file=sys.stdout)
+                    try:
+                        from urllib.parse import urlparse
+                        host = urlparse(mirror).netloc
+                        load_animepahe_session_to_client(client, target_domain=host)
+                    except Exception:
+                        pass
+                if verbose: tqdm.write(f" - {mirror.replace('https://', '')}...", end=' ', file=sys.stdout)
                 headers = {
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.5",
-                    "Referer": f"{bypass_target}/"
+                    "Referer": f"{mirror}/"
                 }
-                res = client.get(bypass_target, headers=headers, timeout=7)
-                if res.status_code < 400:
-                    if verbose: tqdm.write("OK", file=sys.stdout)
-                    save_working_mirror("animepahe", bypass_target)
-                    config.ANIMEPAHE_URL = bypass_target
-                    log_debug(f"Selected working AnimePahe mirror after bypass: {bypass_target}")
-                    notify_mirror_update(site_type, True, bypass_target)
+                res = client.get(mirror, headers=headers, timeout=10)
+                
+                if res.status_code in (403, 503) and site_type == "animepahe":
+                    if not first_cf_blocked_mirror:
+                        first_cf_blocked_mirror = mirror
+                        
+                # AnimePahe returns 403 for Cloudflare challenges. We only accept status < 400.
+                is_ok = res.status_code < 400 if site_type == "animepahe" else res.status_code < 500
+                if is_ok:
+                    if hasattr(res.url, 'scheme'):
+                        # httpx style
+                        path = getattr(res.url, 'path', '')
+                        final_url = f"{res.url.scheme}://{res.url.host}{path}".rstrip('/')
+                        host = res.url.host
+                    else:
+                        # requests/cloudscraper style
+                        from urllib.parse import urlparse
+                        parsed = urlparse(res.url)
+                        final_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip('/')
+                        host = parsed.netloc
+
+                    if verbose: 
+                        if final_url.rstrip('/') != mirror.rstrip('/'):
+                            tqdm.write(f"OK (redirected to {host})", file=sys.stdout)
+                        else:
+                            tqdm.write("OK", file=sys.stdout)
+                    
+                    # Save as working mirror in DB
+                    save_working_mirror(site_type, mirror)
+                    
+                    if site_type == "animepahe":
+                        config.ANIMEPAHE_URL = final_url
+                        client.cookies.set("__ddg2_", "", domain=host)
+                        client.headers.update({"Referer": f"{final_url}/"})
+                    elif site_type == "jikan":
+                        config.JIKAN_API_URL = final_url
+                    elif site_type == "anilist":
+                        config.ANILIST_API_URL = final_url
+                    elif site_type == "kitsu":
+                        config.KITSU_API_URL = final_url
+                    else:
+                        config.KWIK_URL = final_url
+                    
+                    log_debug(f"Selected working {display_name} mirror: {final_url} (was {mirror})")
+                    working_mirror_found = True
+                    notify_mirror_update(site_type, True, final_url)
                     return True
                 else:
                     if verbose: tqdm.write(f"FAIL ({res.status_code})", file=sys.stdout)
-        except Exception as e:
-            log_debug(f"AnimePahe browser bypass failed: {e}")
-            
-    notify_mirror_update(site_type, False, None)
-    return False
+            except Exception as e:
+                if verbose: tqdm.write("FAIL", file=sys.stdout)
+                log_debug(f"{display_name} mirror {mirror} failed: {e}")
+                continue
+        
+        if site_type == "animepahe" and not working_mirror_found and first_cf_blocked_mirror:
+            bypass_target = first_cf_blocked_mirror
+            try:
+                from .scraper import get_browser_cookies
+                from .db import save_animepahe_session
+                tqdm.write(f"\nAll mirrors return 403. Opening browser to solve Cloudflare challenge...", file=sys.stdout)
+                cookies, ua, _ = get_browser_cookies(bypass_target)
+                if cookies and ua:
+                    save_animepahe_session(cookies, ua)
+                    if hasattr(config, 'USER_AGENT'):
+                        config.USER_AGENT = ua
+
+                    # Reset idle connection pool on client to avoid WinError 10054 (stale socket)
+                    try:
+                        if hasattr(client, '_transport') and hasattr(client._transport, '_pool'):
+                            client._transport._pool.close()
+                    except Exception:
+                        pass
+
+                    candidate_mirrors = [bypass_target] + [m for m in ordered_mirrors if m.rstrip('/') != bypass_target.rstrip('/')]
+                    for candidate in candidate_mirrors:
+                        from urllib.parse import urlparse
+                        host = urlparse(candidate).netloc
+                        load_animepahe_session_to_client(client, target_domain=host)
+                        
+                        if verbose: tqdm.write(f" - {candidate.replace('https://', '')} (after bypass)...", end=' ', file=sys.stdout)
+                        headers = {
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.5",
+                            "Referer": f"{candidate}/"
+                        }
+                        
+                        for attempt in range(2):
+                            try:
+                                res = client.get(candidate, headers=headers, timeout=12)
+                                if res.status_code < 400:
+                                    if hasattr(res.url, 'scheme'):
+                                        path = getattr(res.url, 'path', '')
+                                        final_url = f"{res.url.scheme}://{res.url.host}{path}".rstrip('/')
+                                        final_host = res.url.host
+                                    else:
+                                        parsed = urlparse(res.url)
+                                        final_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip('/')
+                                        final_host = parsed.netloc
+
+                                    if verbose: tqdm.write("OK", file=sys.stdout)
+                                    save_working_mirror("animepahe", candidate)
+                                    config.ANIMEPAHE_URL = final_url
+                                    client.cookies.set("__ddg2_", "", domain=final_host)
+                                    client.headers.update({"Referer": f"{final_url}/"})
+                                    log_debug(f"Selected working AnimePahe mirror after bypass: {final_url} (was {candidate})")
+                                    notify_mirror_update(site_type, True, final_url)
+                                    return True
+                                else:
+                                    if attempt == 1 and verbose:
+                                        tqdm.write(f"FAIL ({res.status_code})", file=sys.stdout)
+                            except Exception as ce:
+                                try:
+                                    if hasattr(client, '_transport') and hasattr(client._transport, '_pool'):
+                                        client._transport._pool.close()
+                                except Exception:
+                                    pass
+                                if attempt == 1:
+                                    if verbose: tqdm.write("FAIL", file=sys.stdout)
+                                    log_debug(f"AnimePahe post-bypass mirror {candidate} failed: {ce}")
+                                else:
+                                    time.sleep(0.5)
+            except Exception as e:
+                log_debug(f"AnimePahe browser bypass failed: {e}")
+                
+        notify_mirror_update(site_type, False, None)
+        return False
 
 def normalize_path(path):
     """Normalize colons, slashes and case for robust comparison."""

@@ -228,6 +228,102 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(config.ANIMEPAHE_URL, "https://animepahe.com")
 
+    @patch("modules.db.get_last_working_mirror", return_value=None)
+    @patch("modules.db.save_working_mirror")
+    @patch("modules.db.save_animepahe_session")
+    @patch("modules.db.get_animepahe_session", return_value=([{"name": "cf_clearance", "value": "abc123token", "domain": ".animepahe.pw"}], "TestBrowserUA/1.0"))
+    @patch("modules.scraper.get_browser_cookies")
+    def test_ensure_working_site_mirror_browser_bypass_success(self, mock_get_cookies, mock_get_session, mock_save_session, mock_save_mirror, mock_get_last):
+        mock_get_cookies.return_value = ([{"name": "cf_clearance", "value": "abc123token", "domain": ".animepahe.pw"}], "TestBrowserUA/1.0", None)
+        mock_client = MagicMock()
+
+        # Step 1: probe returns 403
+        probe_res = MagicMock()
+        probe_res.status_code = 403
+
+        # Step 2: after bypass returns 200
+        ok_res = MagicMock()
+        ok_res.status_code = 200
+        ok_res.url = MagicMock()
+        ok_res.url.scheme = "https"
+        ok_res.url.host = "animepahe.pw"
+        ok_res.url.path = "/"
+
+        mock_client.get.side_effect = [probe_res, probe_res, probe_res, probe_res, ok_res]
+
+        success = ensure_working_mirror(mock_client, verbose=True)
+        self.assertTrue(success)
+        mock_get_cookies.assert_called_once()
+        mock_save_session.assert_called_once()
+        mock_client._transport._pool.close.assert_called_once()
+        self.assertEqual(config.ANIMEPAHE_URL, "https://animepahe.pw")
+        self.assertEqual(config.USER_AGENT, "TestBrowserUA/1.0")
+
+    @patch("modules.db.get_last_working_mirror", return_value=None)
+    @patch("modules.db.save_working_mirror")
+    @patch("modules.db.save_animepahe_session")
+    @patch("modules.scraper.get_browser_cookies")
+    def test_ensure_working_site_mirror_browser_bypass_retry_on_socket_reset(self, mock_get_cookies, mock_save_session, mock_save_mirror, mock_get_last):
+        mock_get_cookies.return_value = ([{"name": "cf_clearance", "value": "token123", "domain": ".animepahe.pw"}], "TestBrowserUA/2.0", None)
+        mock_client = MagicMock()
+
+        probe_res = MagicMock()
+        probe_res.status_code = 403
+
+        ok_res = MagicMock()
+        ok_res.status_code = 200
+        ok_res.url = MagicMock()
+        ok_res.url.scheme = "https"
+        ok_res.url.host = "animepahe.pw"
+        ok_res.url.path = "/"
+
+        # 4 initial probes return 403, 1st post-bypass attempt raises WinError 10054, 2nd succeeds
+        mock_client.get.side_effect = [
+            probe_res, probe_res, probe_res, probe_res,
+            ConnectionResetError("[WinError 10054] An existing connection was forcibly closed by the remote host"),
+            ok_res
+        ]
+
+        success = ensure_working_mirror(mock_client, verbose=True)
+        self.assertTrue(success)
+        mock_get_cookies.assert_called_once()
+        mock_save_session.assert_called_once()
+        self.assertEqual(config.ANIMEPAHE_URL, "https://animepahe.pw")
+
+    @patch("modules.db.get_last_working_mirror", return_value=None)
+    @patch("modules.db.save_working_mirror")
+    @patch("modules.db.save_animepahe_session")
+    @patch("modules.scraper.get_browser_cookies")
+    def test_ensure_working_site_mirror_browser_bypass_fallback_mirror(self, mock_get_cookies, mock_save_session, mock_save_mirror, mock_get_last):
+        mock_get_cookies.return_value = ([{"name": "cf_clearance", "value": "token123", "domain": ".animepahe.pw"}], "TestBrowserUA/3.0", None)
+        mock_client = MagicMock()
+
+        probe_res = MagicMock()
+        probe_res.status_code = 403
+
+        fail_res = MagicMock()
+        fail_res.status_code = 502
+
+        ok_res = MagicMock()
+        ok_res.status_code = 200
+        ok_res.url = MagicMock()
+        ok_res.url.scheme = "https"
+        ok_res.url.host = "animepahe.com"
+        ok_res.url.path = "/"
+
+        # 4 initial probes return 403.
+        # Post-bypass: bypass_target (animepahe.pw) fails 2 attempts with 502.
+        # Next candidate (animepahe.com) returns 200 OK!
+        mock_client.get.side_effect = [
+            probe_res, probe_res, probe_res, probe_res,
+            fail_res, fail_res,
+            ok_res
+        ]
+
+        success = ensure_working_mirror(mock_client, verbose=True)
+        self.assertTrue(success)
+        self.assertEqual(config.ANIMEPAHE_URL, "https://animepahe.com")
+
     def test_parse_year_tag(self):
         from modules.utils import parse_year_tag
         self.assertEqual(parse_year_tag(2020), "(2020)")
