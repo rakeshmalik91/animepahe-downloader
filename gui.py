@@ -123,16 +123,156 @@ class QueueToolTip:
             self.tip_window = None
 
 
-class AnimePaheGUI:
+class SplashScreen:
+    """A modern, sleek dark-themed splash screen with progress indicator."""
     def __init__(self, root):
         self.root = root
+        self.window = tk.Toplevel(root)
+        self.window.overrideredirect(True)
+        try:
+            self.window.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        # Center on primary display
+        width, height = 480, 270
+        screen_w = self.window.winfo_screenwidth()
+        screen_h = self.window.winfo_screenheight()
+        x = (screen_w - width) // 2
+        y = (screen_h - height) // 2
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        self.window.configure(bg="#11111b")
+
+        # Outer border frame with glowing neon accent
+        border_frame = tk.Frame(self.window, bg="#181825", highlightbackground="#89b4fa", highlightthickness=1)
+        border_frame.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+
+        content = tk.Frame(border_frame, bg="#181825")
+        content.pack(fill=tk.BOTH, expand=True, padx=24, pady=18)
+
+        # App Icon
+        self.icon_photo = None
+        icon_png = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "app_icon.png")
+        if os.path.exists(icon_png):
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(icon_png).resize((72, 72), Image.Resampling.LANCZOS)
+                self.icon_photo = ImageTk.PhotoImage(img)
+            except Exception:
+                try:
+                    self.icon_photo = tk.PhotoImage(file=icon_png)
+                except Exception:
+                    pass
+
+        if self.icon_photo:
+            lbl_icon = tk.Label(content, image=self.icon_photo, bg="#181825")
+            lbl_icon.pack(pady=(2, 6))
+
+        lbl_title = tk.Label(
+            content,
+            text="AnimePahe Auto-Downloader",
+            font=("Segoe UI", 15, "bold"),
+            fg="#cdd6f4",
+            bg="#181825",
+        )
+        lbl_title.pack()
+
+        lbl_sub = tk.Label(
+            content,
+            text="Automated Tracking & Segmented Downloader",
+            font=("Segoe UI", 9),
+            fg="#a6adc8",
+            bg="#181825",
+        )
+        lbl_sub.pack(pady=(2, 12))
+
+        self.status_var = tk.StringVar(value="Initializing environment...")
+        self.lbl_status = tk.Label(
+            content,
+            textvariable=self.status_var,
+            font=("Segoe UI", 9),
+            fg="#89b4fa",
+            bg="#181825",
+        )
+        self.lbl_status.pack(anchor=tk.W, pady=(0, 4))
+
+        style = ttk.Style(self.window)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure(
+            "Splash.Horizontal.TProgressbar",
+            troughcolor="#313244",
+            background="#89b4fa",
+            bordercolor="#181825",
+            lightcolor="#89b4fa",
+            darkcolor="#89b4fa",
+            thickness=6,
+        )
+
+        self.progress = ttk.Progressbar(
+            content,
+            orient="horizontal",
+            mode="determinate",
+            length=430,
+            style="Splash.Horizontal.TProgressbar",
+        )
+        self.progress.pack(fill=tk.X)
+        self.progress["value"] = 20
+
+        self.window.update()
+
+    def set_status(self, text: str, value: int = None):
+        self.status_var.set(text)
+        if value is not None:
+            self.progress["value"] = value
+        try:
+            self.window.update_idletasks()
+        except Exception:
+            pass
+
+    def finish(self):
+        try:
+            self.window.destroy()
+        except Exception:
+            pass
+
+
+class AnimePaheGUI:
+    def __init__(self, root, splash=None):
+        self.root = root
+        self.splash = splash
         self.root.title("AnimePahe Auto-Downloader")
+
+        if self.splash:
+            self.splash.set_status("Initializing database...", 35)
 
         # Initialize DB
         init_db()
 
         self.root.minsize(920, 720)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # Set window & taskbar icon if available
+        # On Windows, iconbitmap (.ico) is the reliable method for the taskbar icon.
+        # iconphoto (.png) uses WM_SETICON which can override iconbitmap and cause
+        # the taskbar icon to not render. Only fall back to iconphoto if iconbitmap fails.
+        try:
+            icon_ico = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "app_icon.ico")
+            icon_png = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "app_icon.png")
+            icon_set = False
+            if os.path.exists(icon_ico):
+                try:
+                    self.root.iconbitmap(icon_ico)
+                    icon_set = True
+                except Exception as exc:
+                    log_debug(f"iconbitmap failed, falling back to iconphoto: {exc}")
+            if not icon_set and os.path.exists(icon_png):
+                self.icon_image = tk.PhotoImage(file=icon_png)
+                self.root.iconphoto(True, self.icon_image)
+        except Exception:
+            pass
 
         # Thread management & state
         self.running_thread = None
@@ -155,6 +295,8 @@ class AnimePaheGUI:
         set_prompt_handler(self.gui_prompt_handler)
 
         # Build Theme & UI Components
+        if self.splash:
+            self.splash.set_status("Configuring interface & theme...", 60)
         self.setup_styles()
         self.build_ui()
 
@@ -176,6 +318,9 @@ class AnimePaheGUI:
 
         # Register real-time mirror update callback
         register_mirror_callback(self._on_mirror_status_changed)
+
+        if self.splash:
+            self.splash.set_status("Checking network mirrors...", 85)
 
         # Initial Mirror Check in Background
         self.trigger_mirror_check()
@@ -606,6 +751,26 @@ class AnimePaheGUI:
         self.cfg_segmented_var = tk.BooleanVar(value=getattr(config, 'ENABLE_SEGMENTED_DOWNLOAD', True))
         ttk.Checkbutton(col2, text="Enable Segmented downloads", variable=self.cfg_segmented_var).pack(anchor=tk.W, pady=1)
 
+        # External Downloader (My-IDM)
+        idm_card = ttk.LabelFrame(settings_card, text=" External Download Manager (My-IDM) ")
+        idm_card.pack(fill=tk.X, pady=(10, 4))
+
+        self.cfg_use_my_idm_var = tk.BooleanVar(value=getattr(config, 'USE_MY_IDM', False))
+        ttk.Checkbutton(idm_card, text="Trigger downloads to My-IDM backlog (bypass internal downloader)", variable=self.cfg_use_my_idm_var).pack(anchor=tk.W, padx=8, pady=(6, 3))
+
+        f_idm_dir = ttk.Frame(idm_card)
+        f_idm_dir.pack(fill=tk.X, padx=8, pady=3)
+        ttk.Label(f_idm_dir, text="My-IDM Repo Dir:", width=18).pack(side=tk.LEFT)
+        self.cfg_my_idm_dir_var = tk.StringVar(value=getattr(config, 'MY_IDM_DIR', r"D:\Projects\my-idm"))
+        ttk.Entry(f_idm_dir, textvariable=self.cfg_my_idm_dir_var, font=("Segoe UI", 9)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(f_idm_dir, text="Browse...", command=self.action_browse_my_idm_dir).pack(side=tk.RIGHT, padx=2)
+
+        f_idm_opts = ttk.Frame(idm_card)
+        f_idm_opts.pack(fill=tk.X, padx=8, pady=(3, 6))
+        self.cfg_auto_start_my_idm_var = tk.BooleanVar(value=getattr(config, 'AUTO_START_MY_IDM', True))
+        ttk.Checkbutton(f_idm_opts, text="Auto-start My-IDM app when tasks finish (before auto-close)", variable=self.cfg_auto_start_my_idm_var).pack(side=tk.LEFT)
+
+        ttk.Button(f_idm_opts, text="🚀 Launch My-IDM Now", command=self.action_test_launch_my_idm).pack(side=tk.RIGHT, padx=4)
 
         # Save & Actions Button Bar
         btn_bar = ttk.Frame(settings_card)
@@ -1278,6 +1443,19 @@ class AnimePaheGUI:
             self.btn_stop_scan.config(state="disabled")
             self.update_queue_ui()
             self.append_log("\n🏁 All queued tasks completed.\n")
+            if getattr(config, 'USE_MY_IDM', False) and getattr(config, 'AUTO_START_MY_IDM', True):
+                from modules.my_idm import launch_my_idm, get_pending_download_count
+                pending = get_pending_download_count()
+                if pending > 0:
+                    self.append_log("\n🚀 Triggering My-IDM download manager...\n")
+                    success, msg = launch_my_idm()
+                    if success:
+                        self.append_log(f"✅ {msg}\n")
+                    else:
+                        self.append_log(f"⚠️ {msg}\n")
+                else:
+                    self.append_log("\n📭 No new downloads queued for My-IDM; skipping launch.\n")
+
             if self.close_after_tasks_var.get():
                 self._start_auto_close_countdown()
 
@@ -1499,6 +1677,20 @@ class AnimePaheGUI:
         if d:
             self.cfg_dir_var.set(d)
 
+    def action_browse_my_idm_dir(self):
+        d = filedialog.askdirectory(initialdir=self.cfg_my_idm_dir_var.get() or r"D:\Projects\my-idm")
+        if d:
+            self.cfg_my_idm_dir_var.set(d)
+
+    def action_test_launch_my_idm(self):
+        from modules.my_idm import launch_my_idm
+        target_dir = self.cfg_my_idm_dir_var.get().strip() or getattr(config, 'MY_IDM_DIR', r"D:\Projects\my-idm")
+        success, msg = launch_my_idm(my_idm_dir=target_dir, force=True)
+        if success:
+            messagebox.showinfo("My-IDM", msg)
+        else:
+            messagebox.showwarning("My-IDM Error", msg)
+
     def action_save_settings(self):
         try:
             # Update memory variables
@@ -1527,6 +1719,17 @@ class AnimePaheGUI:
             save_setting("DOWNLOAD_SEGMENTS", config.DOWNLOAD_SEGMENTS)
             save_setting("MAX_DISTANCE_THRESHOLD", config.MAX_DISTANCE_THRESHOLD)
 
+            # Save My-IDM settings
+            if hasattr(self, 'cfg_use_my_idm_var'):
+                config.USE_MY_IDM = self.cfg_use_my_idm_var.get()
+                save_setting("USE_MY_IDM", config.USE_MY_IDM)
+            if hasattr(self, 'cfg_my_idm_dir_var'):
+                config.MY_IDM_DIR = self.cfg_my_idm_dir_var.get().strip()
+                save_setting("MY_IDM_DIR", config.MY_IDM_DIR)
+            if hasattr(self, 'cfg_auto_start_my_idm_var'):
+                config.AUTO_START_MY_IDM = self.cfg_auto_start_my_idm_var.get()
+                save_setting("AUTO_START_MY_IDM", config.AUTO_START_MY_IDM)
+
 
             messagebox.showinfo("Settings Saved", "Settings successfully saved to database!")
         except Exception as e:
@@ -1535,7 +1738,23 @@ class AnimePaheGUI:
 
 def main():
     root = tk.Tk()
-    app = AnimePaheGUI(root)
+    root.withdraw()
+
+    splash = SplashScreen(root)
+    splash.set_status("Loading configuration...", 15)
+
+    app = AnimePaheGUI(root, splash=splash)
+
+    def reveal():
+        splash.set_status("Ready!", 100)
+        def show_main():
+            splash.finish()
+            root.deiconify()
+            root.lift()
+            root.focus_force()
+        root.after(250, show_main)
+
+    root.after(400, reveal)
     root.mainloop()
 
 

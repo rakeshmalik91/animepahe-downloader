@@ -421,5 +421,83 @@ class TestProcessor(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(self.mock_download.call_count, 2)
 
+    @patch("modules.my_idm.add_to_my_idm_backlog", return_value=True)
+    def test_process_one_folder_routes_to_my_idm(self, mock_add_backlog):
+        config.USE_MY_IDM = True
+        try:
+            mock_client = MagicMock()
+            mock_res = MagicMock()
+            mock_res.status_code = 200
+            mock_res.json.return_value = {
+                "data": [
+                    {"episode": 1, "session": "sess_1"}
+                ]
+            }
+            mock_client.get.return_value = mock_res
+            self.mock_direct_link.return_value = ("https://owocdn.top/file.mp4", "en", {"en"})
+
+            success, anime_id, anime_title = process_one_folder(
+                mock_client,
+                r"D:\Downloads\ANIME\Frieren",
+                anime_id="anime_123",
+                anime_title="Frieren",
+                parallel=1
+            )
+
+            self.assertTrue(success)
+            mock_add_backlog.assert_called_once_with(
+                "https://owocdn.top/file.mp4",
+                filename="AnimePahe_Frieren_-_01_720p_EngDub.mp4",
+                title="Frieren",
+                ep_num=1,
+                save_path=r"D:\Downloads\ANIME\Frieren"
+            )
+            # download_file should NOT be called
+            self.mock_download.assert_not_called()
+        finally:
+            config.USE_MY_IDM = False
+
+    @patch("modules.my_idm.add_to_my_idm_backlog", return_value=True)
+    def test_process_one_folder_routes_to_my_idm_with_renamed_pattern(self, mock_add_backlog):
+        config.USE_MY_IDM = True
+        try:
+            mock_client = MagicMock()
+            mock_res = MagicMock()
+            mock_res.status_code = 200
+            mock_res.json.return_value = {
+                "data": [
+                    {"episode": 2, "session": "sess_2"}
+                ]
+            }
+            mock_client.get.return_value = mock_res
+            self.mock_direct_link.return_value = ("https://owocdn.top/file2.mp4", "en", {"en"})
+
+            # Folder already has episode 1 with pattern "Frieren - 01.mp4"
+            self.mock_walk.return_value = [
+                (r"D:\Downloads\ANIME\Frieren", [], ["Frieren - 01.mp4"])
+            ]
+
+            success, anime_id, anime_title = process_one_folder(
+                mock_client,
+                r"D:\Downloads\ANIME\Frieren",
+                anime_id="anime_123",
+                anime_title="Frieren",
+                parallel=1
+            )
+
+            self.assertTrue(success)
+            # Should send renamed pattern filename "Frieren - 02.mp4", not website generated name!
+            mock_add_backlog.assert_called_once_with(
+                "https://owocdn.top/file2.mp4",
+                filename="Frieren - 02.mp4",
+                title="Frieren",
+                ep_num=2,
+                save_path=r"D:\Downloads\ANIME\Frieren"
+            )
+            self.mock_download.assert_not_called()
+        finally:
+            config.USE_MY_IDM = False
+
 if __name__ == "__main__":
     unittest.main()
+

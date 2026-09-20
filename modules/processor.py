@@ -37,7 +37,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
             ans = prompt_user(f"  Is '{anime_title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
             if ans == 'u':
                 new_url = prompt_user("    Enter AnimePahe URL: ").strip()
-                match = re.search(r'/anime/([a-f0-9-]+)', new_url)
+                match = re.search(r'/(?:anime|play|a)/([a-f0-9-]+)', new_url, re.IGNORECASE)
                 if match:
                     anime_id = match.group(1)
                     anime_title = None # Will fetch later
@@ -170,7 +170,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                 ans = prompt_user(f"  Is '{new_title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
                 if ans == 'u':
                     new_url = prompt_user("    Enter AnimePahe URL: ").strip()
-                    match = re.search(r'/anime/([a-f0-9-]+)', new_url)
+                    match = re.search(r'/(?:anime|play|a)/([a-f0-9-]+)', new_url, re.IGNORECASE)
                     if match:
                         new_id = match.group(1)
                         new_title = anime_title
@@ -286,13 +286,13 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
         for root, _, flist in os.walk(folder_path):
             for f in flist:
                 if not (f.endswith('.mp4') or f.endswith('.mkv')): continue
-                m = re.match(r'^(.*(?:_-_| - |Episode |\[|\s))(\d{1,4})([-_\s].*)\.(mp4|mkv)$', f)
+                m = re.match(r'^(.*(?:_-_| - |Episode |\[|\s))(\d{1,4})((?:[-_\s].*)?)\.(mp4|mkv)$', f)
                 if not m:
-                    m = re.match(r'^(.*[^0-9])(\d{1,4})([^0-9]+(?:720|1080|360)p.*)\.(mp4|mkv)$', f)
+                    m = re.match(r'^(.*[^0-9])(\d{1,4})((?:[^0-9]+(?:720|1080|360)p.*)?)\.(mp4|mkv)$', f)
                 if m:
                     prefix = m.group(1)
                     ep_str = m.group(2)
-                    suffix = m.group(3)
+                    suffix = m.group(3) or ""
                     ext = m.group(4)
                     try:
                         ep_val = int(ep_str)
@@ -316,11 +316,13 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
 
         # Rename any existing files that have less padding than target_padding
         name_prefix, name_suffix = None, None
+        name_ext = None
         for item in matched_files:
             # Set name_prefix and name_suffix from the first matched file
-            if not name_prefix:
+            if name_prefix is None:
                 name_prefix = item['prefix']
                 name_suffix = item['suffix']
+                name_ext = item.get('ext')
             
             curr_pad = len(item['ep_str'])
             if curr_pad < target_padding:
@@ -421,12 +423,33 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                             return
 
             if direct:
-                if name_prefix and name_suffix:
-                    filename = f"{name_prefix}{str(ep_num).zfill(name_padding)}{name_suffix}.mp4"
+                if name_prefix is not None and name_suffix is not None:
+                    ext = name_ext or "mp4"
+                    filename = f"{name_prefix}{str(ep_num).zfill(name_padding)}{name_suffix}.{ext}"
                 else:
                     lang_tag = "_EngDub" if (actual_lang or effective_lang) == 'en' else "_SubsPlease"
                     filename = f"AnimePahe_{anime_title}_-_{str(ep_num).zfill(name_padding)}_{quality}{lang_tag}.mp4"
                 save_path = os.path.join(folder_path, filename)
+                
+                # If My-IDM is configured, queue download to backlog instead of downloading internally
+                if getattr(config, 'USE_MY_IDM', False):
+                    if is_first and start_event:
+                        start_event.set()
+                    from .my_idm import add_to_my_idm_backlog
+                    added = add_to_my_idm_backlog(direct, filename=filename, title=anime_title, ep_num=ep_num, save_path=folder_path)
+                    if added:
+                        safe_print(f"    - Queued to My-IDM backlog: {filename} -> {folder_path}")
+                    else:
+                        safe_print(f"    - Already in My-IDM backlog: {filename}")
+                    
+                    if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                        send_windows_notification("Queued in My-IDM", f"{anime_title} - Episode {ep_num}", folder_path)
+                    
+                    from .db import get_tracked, save_tracked
+                    t_info = get_tracked(folder_path)
+                    if not t_info or t_info[0] != anime_id:
+                        save_tracked(folder_path, anime_id, anime_title, True)
+                    return
                 
                 retry_count = 0
                 max_retries = getattr(config, 'MAX_DOWNLOAD_RETRIES', 5)

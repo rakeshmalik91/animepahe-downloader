@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="media/app_icon.png" width="128" height="128" alt="AnimePahe Auto-Downloader App Icon" />
+</p>
+
 # AnimePahe Auto-Downloader
 
 A powerful set of scripts and modules designed to automate the process of tracking and downloading anime from AnimePahe.
@@ -19,11 +23,14 @@ A powerful set of scripts and modules designed to automate the process of tracki
 ## Usage
 
 ### Graphical User Interface (GUI)
-Launch the GUI either directly or via the CLI flag:
+Launch the GUI either directly, via the CLI flag, or console-less via `run.pyw` / `run_gui.bat`:
 ```powershell
 python gui.py
 # OR
 python animepahe_download.py --gui
+# OR (no terminal window on Windows / double-click)
+pythonw run.pyw
+# OR simply double-click run.pyw or run_gui.bat
 ```
 
 ### Getting Started (CLI)
@@ -41,9 +48,12 @@ python animepahe_download.py
 
 ## File Structure
 
+- `run.pyw`: Console-less GUI launcher (ideal for shortcuts / double-clicking on Windows).
+- `run_gui.bat`: One-click Windows batch launcher to start the GUI console-less via `pythonw`.
 - `animepahe_download.py`: The entry point for the application CLI and `--gui` launcher.
 - `gui.py`: Standalone Desktop Graphical User Interface script.
 - `config.py`: Local settings including base download paths, default quality, and mirror lists.
+- `media/`: Application assets including `app_icon.ico`, `app_icon.png`, and UI screenshots.
 - `tracking.db`: Database file tracking which anime IDs map to which local folders.
 - `modules/`: Contains the core logic for web scraping, database management, and download processing.
 - `animepahe_download.bat`: A convenient shortcut for running the downloader on Windows.

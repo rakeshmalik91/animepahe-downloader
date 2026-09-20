@@ -245,5 +245,36 @@ class TestMain(unittest.TestCase):
             ANY, ANY, episodes_filter=ANY, parallel=ANY
         )
 
+    @patch("httpx.Client")
+    @patch("modules.my_idm.get_pending_download_count", return_value=0)
+    def test_main_no_my_idm_launch_when_no_pending(self, mock_count, mock_client):
+        from modules import my_idm
+        my_idm.reset_pending_download_count()
+        config.USE_MY_IDM = True
+
+        sys.argv = ["animepahe_download.py", "Frieren"]
+        self.mock_get_tracked.return_value = ("anime_123", "Frieren", 1, None)
+
+        animepahe_download.main()
+
+        # No downloads queued -> My-IDM should NOT be launched
+        self.mock_process_folder.assert_called_once()
+        self.assertEqual(my_idm.get_pending_download_count(), 0)
+        config.USE_MY_IDM = False
+
+    @patch("httpx.Client")
+    @patch("modules.my_idm.get_pending_download_count", return_value=2)
+    @patch("modules.my_idm.launch_my_idm", return_value=(True, "Launched"))
+    def test_main_launches_my_idm_when_pending(self, mock_launch, mock_count, mock_client):
+        config.USE_MY_IDM = True
+
+        sys.argv = ["animepahe_download.py", "Frieren"]
+        self.mock_get_tracked.return_value = ("anime_123", "Frieren", 1, None)
+
+        animepahe_download.main()
+
+        mock_launch.assert_called_once()
+        config.USE_MY_IDM = False
+
 if __name__ == "__main__":
     unittest.main()

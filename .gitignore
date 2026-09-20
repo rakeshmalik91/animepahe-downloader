@@ -152,7 +152,9 @@ cython_debug/
 Thumbs.db
 
 # Project-specific logs and databases
-debug_log.txt
-dummy_log.txt
+*_log.txt
 tracking.db
 tests/test_tracking.db
+docs/TODO.md
+
+.kilo
