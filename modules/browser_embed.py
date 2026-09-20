@@ -78,6 +78,12 @@ def get_container_hwnd():
             return hwnd
         except Exception:
             pass
+    env_hwnd = os.environ.get("ANIMEPAHE_EMBED_CONTAINER_HWND")
+    if env_hwnd:
+        try:
+            return int(env_hwnd)
+        except Exception:
+            pass
     return None
 
 
@@ -152,7 +158,8 @@ def find_chrome_hwnd(existing_hwnds=None, timeout=10):
 def embed_chrome_driver(driver, existing_hwnds=None, width=800, height=500):
     """Reparents uc.Chrome driver window into the registered GUI container HWND."""
     global CURRENT_CHROME_HWND
-    if not user32 or not EMBEDDED_CONTAINER_GETTER:
+    container_hwnd = get_container_hwnd()
+    if not user32 or not container_hwnd:
         log_debug("Cannot embed Chrome driver: user32 or container getter missing.")
         return False
 
@@ -166,14 +173,15 @@ def embed_chrome_driver(driver, existing_hwnds=None, width=800, height=500):
 
         time.sleep(0.5)
 
-        container_info = EMBEDDED_CONTAINER_GETTER()
-        if not container_info or not container_info[0]:
-            log_debug("Container HWND unavailable.")
-            return False
-
-        container_hwnd, c_width, c_height = container_info
-        if c_width > 100: width = c_width
-        if c_height > 100: height = c_height
+        if EMBEDDED_CONTAINER_GETTER:
+            try:
+                container_info = EMBEDDED_CONTAINER_GETTER()
+                if container_info and container_info[0]:
+                    _, c_width, c_height = container_info
+                    if c_width > 100: width = c_width
+                    if c_height > 100: height = c_height
+            except Exception:
+                pass
 
         chrome_hwnd = find_chrome_hwnd(existing_hwnds=existing_hwnds, timeout=8)
         if not chrome_hwnd:

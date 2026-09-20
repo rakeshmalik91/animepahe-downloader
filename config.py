@@ -66,7 +66,14 @@ ENABLE_YEAR_TAGS = True                 # Append release year to top-level anime
 ENABLE_NOTIFICATIONS = True
 AUTO_RUN_SCANNER_ON_STARTUP = False
 
+# My-IDM External Download Manager settings
+USE_MY_IDM = False                      # If true, forward downloads to My-IDM backlog instead of downloading internally
+MY_IDM_DIR = r"D:\Projects\my-idm"      # Root directory of My-IDM repository
+MY_IDM_BACKLOG_FILE = ""                # Custom backlog path (empty for default <MY_IDM_DIR>\backlog.txt)
+AUTO_START_MY_IDM = True                # Launch My-IDM app at the end of all pending tasks if USE_MY_IDM is enabled
+
 
 # Database for tracking
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tracking.db")
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_log.txt")
+

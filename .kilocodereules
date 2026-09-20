@@ -1,0 +1,7 @@
+# Kilo Code Rules
+
+- Project Type: Python CLI & Desktop GVI Application.
+- Workspace: Always work directly in the current workspace directory and on the active git branch.
+- No Git Worktrees: NEVER create, switch to, or duplicate files into Git worktrees or `.kilo/worktrees/`.
+- No Webapp Scaffolding: Do NOT create separate "webapp" folders, node_modules, package.json, or web frontend templates.
+- Maintain existing Python application architecture.

@@ -100,11 +100,20 @@ def main(cli_args=None):
     parser.add_argument("--skip-folder", help="Manually add a folder to the skip list forever")
     parser.add_argument("--unskip-folder", help="Manually remove a folder from the skip list")
     parser.add_argument("--gui", action="store_true", help="Launch GUI interface")
+    parser.add_argument("--my-idm", dest="use_my_idm", action="store_true", default=None, help="Forward downloads to My-IDM backlog")
+    parser.add_argument("--no-my-idm", dest="use_my_idm", action="store_false", help="Disable forwarding downloads to My-IDM backlog")
+    parser.add_argument("--my-idm-dir", help="Path to My-IDM repository directory")
     
     args = parser.parse_args(cli_args)
     
     if args.enable_year_tags is not None:
         config.ENABLE_YEAR_TAGS = args.enable_year_tags
+
+    if args.use_my_idm is not None:
+        config.USE_MY_IDM = args.use_my_idm
+
+    if args.my_idm_dir:
+        config.MY_IDM_DIR = args.my_idm_dir
 
     
     if args.gui:
@@ -442,7 +451,7 @@ def main(cli_args=None):
                         break
 
             if args.url:
-                match = re.search(r'/anime/([a-f0-9-]+)', args.url)
+                match = re.search(r'/(?:anime|play|a)/([a-f0-9-]+)', args.url, re.IGNORECASE)
                 if match: 
                     aid = match.group(1)
                     # If URL used, ignore old title to force update from API/Page
@@ -467,7 +476,7 @@ def main(cli_args=None):
                     ans = prompt_user(f"  Is '{title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
                     if ans == 'u':
                         new_url = prompt_user("    Enter AnimePahe URL: ").strip()
-                        match = re.search(r'/anime/([a-f0-9-]+)', new_url)
+                        match = re.search(r'/(?:anime|play|a)/([a-f0-9-]+)', new_url, re.IGNORECASE)
                         if match:
                             aid = match.group(1)
                             title = None
@@ -494,7 +503,7 @@ def main(cli_args=None):
                 if args.url or not tracked or aid != original_aid or title != original_title:
                     save_tracked(potential_path, aid, title, True)
     elif args.url:
-        match = re.search(r'/anime/([a-f0-9-]+)', args.url)
+        match = re.search(r'/(?:anime|play|a)/([a-f0-9-]+)', args.url, re.IGNORECASE)
         if match:
             aid = match.group(1)
             existing_folder = get_folder_by_id(aid)
@@ -595,7 +604,7 @@ def main(cli_args=None):
                     ans = prompt_user(f"  Is '{title}' correct? [y(es)/n(o)/u(rl)]: ").lower()
                     if ans == 'u':
                         new_url = prompt_user("    Enter AnimePahe URL: ").strip()
-                        match = re.search(r'/anime/([a-f0-9-]+)', new_url)
+                        match = re.search(r'/(?:anime|play|a)/([a-f0-9-]+)', new_url, re.IGNORECASE)
                         if match:
                             aid = match.group(1)
                             title = None
@@ -624,7 +633,7 @@ def main(cli_args=None):
                             save_tracked(folder_path, final_aid, final_title, True)
                     elif ans == 'u':
                         new_url = prompt_user("    Enter AnimePahe URL: ").strip()
-                        match = re.search(r'/anime/([a-f0-9-]+)', new_url)
+                        match = re.search(r'/(?:anime|play|a)/([a-f0-9-]+)', new_url, re.IGNORECASE)
                         if match:
                             new_aid = match.group(1)
                             success, final_aid, final_title = process_one_folder(client, folder_path, new_aid, None, args.quality, args.lang, episodes_filter=target_episodes, parallel=args.parallel)
@@ -665,6 +674,16 @@ def main(cli_args=None):
 
     cleanup_db()
     client.close()
+
+    if getattr(config, 'USE_MY_IDM', False) and getattr(config, 'AUTO_START_MY_IDM', True):
+        from modules.my_idm import launch_my_idm, get_pending_download_count
+        pending = get_pending_download_count()
+        if pending > 0:
+            tqdm.write("\nTriggering My-IDM download manager...", file=sys.stdout)
+            success, msg = launch_my_idm()
+            tqdm.write(f"{'[OK]' if success else '[WARN]'} {msg}", file=sys.stdout)
+        else:
+            tqdm.write("\nNo new downloads queued for My-IDM; skipping launch.", file=sys.stdout)
 
 if __name__ == '__main__':
     main()
