@@ -56,11 +56,18 @@ def add_to_my_idm_backlog(
     title: Optional[str] = None,
     ep_num: Optional[int] = None,
     save_path: Optional[str] = None,
+    queue: Optional[str] = None,
 ) -> bool:
     """
     Append a direct download URL and metadata comment to the My-IDM backlog file.
     Supports inline custom download location delimiter: 'url | save_path'.
     Also synchronizes to ~/.my-idm/backlog.txt so My-IDM can read it without CLI args.
+
+    ``queue`` names the My-IDM queue the entry belongs to, written as a trailing
+    ``| queue=<name>`` column. Defaults to ``config.MY_IDM_QUEUE_NAME``; pass "" to omit the
+    column entirely. My-IDM resolves the name case-insensitively and falls back to its Default
+    queue for a name it does not know, so this is safe to leave set even if the queue is
+    renamed or removed there.
 
     Returns True if the URL was added, False if it was already present.
     """
@@ -89,6 +96,15 @@ def add_to_my_idm_backlog(
         entry_line = f"{clean_url} | filename={clean_filename}"
     else:
         entry_line = clean_url
+
+    # Queue goes last so it is never mistaken for a path or a filename by the positional
+    # columns My-IDM also supports, and so the leading columns stay byte-identical to what an
+    # older build wrote - the duplicate scan below compares on the URL column alone.
+    if queue is None:
+        queue = getattr(config, "MY_IDM_QUEUE_NAME", "")
+    queue_name = queue.strip() if queue else ""
+    if queue_name:
+        entry_line += f" | queue={queue_name}"
 
     added_any = False
     for target_path in [backlog_path, app_backlog_path]:

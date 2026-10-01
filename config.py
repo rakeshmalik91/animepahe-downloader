@@ -70,6 +70,7 @@ AUTO_RUN_SCANNER_ON_STARTUP = False
 USE_MY_IDM = False                      # If true, forward downloads to My-IDM backlog instead of downloading internally
 MY_IDM_DIR = r"D:\Projects\my-idm"      # Root directory of My-IDM repository
 MY_IDM_BACKLOG_FILE = ""                # Custom backlog path (empty for default <MY_IDM_DIR>\backlog.txt)
+MY_IDM_QUEUE_NAME = "AnimePahe"         # Named queue each entry is tagged with ("" = omit the tag)
 AUTO_START_MY_IDM = True                # Launch My-IDM app at the end of all pending tasks if USE_MY_IDM is enabled
 
 

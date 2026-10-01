@@ -15,9 +15,11 @@ class TestMyIDMIntegration(unittest.TestCase):
         self.orig_backlog_file = getattr(config, "MY_IDM_BACKLOG_FILE", "")
         self.orig_use_my_idm = getattr(config, "USE_MY_IDM", False)
         self.orig_auto_start = getattr(config, "AUTO_START_MY_IDM", True)
+        self.orig_queue_name = getattr(config, "MY_IDM_QUEUE_NAME", "AnimePahe")
 
         config.MY_IDM_DIR = self.temp_dir.name
         config.MY_IDM_BACKLOG_FILE = ""
+        config.MY_IDM_QUEUE_NAME = self.orig_queue_name
         my_idm.reset_pending_download_count()
 
         # Fail-safe: redirect the app-level backlog path to the temp dir so that
@@ -32,6 +34,7 @@ class TestMyIDMIntegration(unittest.TestCase):
         config.MY_IDM_BACKLOG_FILE = self.orig_backlog_file
         config.USE_MY_IDM = self.orig_use_my_idm
         config.AUTO_START_MY_IDM = self.orig_auto_start
+        config.MY_IDM_QUEUE_NAME = self.orig_queue_name
         my_idm.reset_pending_download_count()
         self.temp_dir.cleanup()
 
@@ -93,6 +96,88 @@ class TestMyIDMIntegration(unittest.TestCase):
     def test_add_empty_url(self):
         self.assertFalse(my_idm.add_to_my_idm_backlog(""))
         self.assertFalse(my_idm.add_to_my_idm_backlog("   "))
+
+    def _backlog_download_lines(self):
+        path = my_idm.get_my_idm_backlog_path()
+        with open(path, "r", encoding="utf-8") as handle:
+            return [
+                line.strip() for line in handle
+                if line.strip() and not line.strip().startswith("#")
+            ]
+
+    def test_entries_are_tagged_with_the_configured_queue(self):
+        """The queue column is what routes the entry in My-IDM.
+
+        My-IDM already infers an AnimePahe queue from the "# AnimePahe Download" comment, so
+        this is belt-and-braces - but it makes the generated backlog self-describing, which
+        matters because the comment is optional and only present on some lines.
+        """
+        my_idm.add_to_my_idm_backlog(
+            "https://vault-900.owocdn.top/a.mkv", filename="a.mkv"
+        )
+        lines = self._backlog_download_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].endswith("| queue=AnimePahe"), lines[0])
+
+    def test_the_queue_column_comes_last_in_every_line_shape(self):
+        """It must never be mistaken for a path or a filename.
+
+        My-IDM also accepts positional columns, so `queue=` has to be the trailing one or a
+        queue name containing a space would be read as a save path.
+        """
+        save_path = r"D:\Downloads\ANIME\One Piece"
+        shapes = [
+            my_idm.add_to_my_idm_backlog("https://vault-901.owocdn.top/a.mkv"),
+            my_idm.add_to_my_idm_backlog(
+                "https://vault-902.owocdn.top/b.mkv", filename="b.mkv"
+            ),
+            my_idm.add_to_my_idm_backlog(
+                "https://vault-903.owocdn.top/c.mkv", save_path=save_path
+            ),
+            my_idm.add_to_my_idm_backlog(
+                "https://vault-904.owocdn.top/d.mkv", save_path=save_path, filename="d.mkv"
+            ),
+        ]
+        self.assertTrue(all(shapes))
+        for line in self._backlog_download_lines():
+            self.assertTrue(line.endswith("| queue=AnimePahe"), line)
+            # The URL stays the first column, which is what the dedup scan compares on.
+            self.assertTrue(line.startswith("https://"), line)
+
+    def test_the_queue_column_does_not_break_deduplication(self):
+        url = "https://vault-905.owocdn.top/e.mkv"
+        self.assertTrue(my_idm.add_to_my_idm_backlog(url))
+        self.assertFalse(my_idm.add_to_my_idm_backlog(url))
+        self.assertEqual(len(self._backlog_download_lines()), 1)
+
+    def test_an_explicit_queue_overrides_the_configured_one(self):
+        my_idm.add_to_my_idm_backlog(
+            "https://vault-906.owocdn.top/f.mkv", queue="Hand Picked"
+        )
+        self.assertTrue(
+            self._backlog_download_lines()[0].endswith("| queue=Hand Picked")
+        )
+
+    def test_an_empty_queue_name_omits_the_column(self):
+        my_idm.add_to_my_idm_backlog(
+            "https://vault-907.owocdn.top/g.mkv", queue=""
+        )
+        line = self._backlog_download_lines()[0]
+        self.assertNotIn("queue=", line)
+        self.assertEqual(line, "https://vault-907.owocdn.top/g.mkv")
+
+    def test_a_blank_configured_queue_name_omits_the_column(self):
+        config.MY_IDM_QUEUE_NAME = ""
+        my_idm.add_to_my_idm_backlog("https://vault-908.owocdn.top/h.mkv")
+        self.assertNotIn("queue=", self._backlog_download_lines()[0])
+
+    def test_a_queue_name_with_spaces_survives_intact(self):
+        my_idm.add_to_my_idm_backlog(
+            "https://vault-909.owocdn.top/i.mkv", queue="Long Running Anime"
+        )
+        self.assertTrue(
+            self._backlog_download_lines()[0].endswith("| queue=Long Running Anime")
+        )
 
     @patch("psutil.process_iter")
     def test_is_my_idm_running_true(self, mock_iter):
