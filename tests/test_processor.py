@@ -316,7 +316,50 @@ class TestProcessor(unittest.TestCase):
             os.path.join(r"D:\Downloads\ANIME\Frieren", "Anime_-_001_720p.mp4")
         )
 
+    def test_process_one_folder_language_fallback_silent_when_default(self):
+        """When no language was requested and no files hint at one, the fallback
+        to the other available language is automatic — no prompt is shown.
+
+        This is the background-scraper behaviour: try en first (the default),
+        then jap, and never block the run on an interactive prompt.
+        """
+        mock_client = MagicMock()
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "data": [{"episode": 1, "session": "sess_1"}]
+        }
+        mock_client.get.return_value = mock_res
+
+        self.mock_direct_link.side_effect = [
+            (None, None, {"jap"}),
+            ("https://owocdn.top/jap_version.mp4", "jap", {"jap"})
+        ]
+
+        success, anime_id, anime_title = process_one_folder(
+            mock_client,
+            r"D:\Downloads\ANIME\Frieren",
+            anime_id="anime_123",
+            anime_title="Frieren",
+            lang=None
+        )
+
+        self.assertTrue(success)
+        self.assertEqual(self.mock_direct_link.call_count, 2)
+        self.mock_download.assert_called_once_with(
+            "https://owocdn.top/jap_version.mp4", ANY, ANY, position=None
+        )
+        # No interactive prompt was issued for the fallback.
+        self.mock_input.assert_not_called()
+
     def test_process_one_folder_language_fallback_prompt(self):
+        """Backwards-compatible name: an explicit lang=None still falls back.
+
+        With no language requested and no existing files hinting at one, the
+        fallback to the other available language is automatic — the old
+        interactive prompt ("en not available. Download jap instead? [y/n]")
+        is no longer issued, so the input mock is never consulted.
+        """
         mock_client = MagicMock()
         mock_res = MagicMock()
         mock_res.status_code = 200
@@ -343,6 +386,8 @@ class TestProcessor(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(self.mock_direct_link.call_count, 2)
         self.mock_download.assert_called_once_with("https://owocdn.top/jap_version.mp4", ANY, ANY, position=None)
+        # The fallback is automatic now — no interactive prompt is issued.
+        self.mock_input.assert_not_called()
 
     @patch("time.sleep")
     def test_process_one_folder_download_fail_retries_and_force_bypass(self, mock_sleep):

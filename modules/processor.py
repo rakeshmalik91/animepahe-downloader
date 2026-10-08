@@ -344,7 +344,12 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
 
         name_padding = target_padding
 
-        # Determine language preference
+        # Determine language preference.
+        # For an existing anime the language is learned from older episodes via
+        # detect_lang_from_files; only when that fails do we fall back to the
+        # default. is_default_fallback is True only for a brand-new anime with
+        # no files at all — that is the one case where the silent en->jap
+        # fallback below applies instead of prompting.
         effective_lang = lang
         is_default_fallback = False
         if not effective_lang:
@@ -399,21 +404,20 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                 other_langs = avail_langs - {effective_lang}
                 if other_langs:
                     other = next(iter(other_langs))
-                    
+
                     if is_default_fallback:
-                        with prompt_lock:
-                            if is_default_fallback:
-                                lang_label = 'English dub' if other == 'en' else 'Japanese sub'
-                                ans = prompt_user(f"    - {effective_lang} not available. Download {lang_label} instead? [y/n]: ").lower()
-                                if ans == 'y':
-                                    effective_lang = other
-                                is_default_fallback = False
-                        
-                        if effective_lang == other:
-                            direct, actual_lang, _ = get_direct_link(client, anime_id, ep['session'], quality, effective_lang)
-                        else:
-                            safe_print(f"    - Skipped (no {effective_lang} available).")
-                            return
+                        # Brand-new anime only: no language was explicitly
+                        # requested and there are no existing files to learn
+                        # one from, so the user has no stated preference. Rather
+                        # than blocking the whole run on an interactive prompt
+                        # ("en not available. Download jap instead? [y/n]"),
+                        # silently fall back to the other available language.
+                        # For an *existing* anime this branch is never taken:
+                        # the language is figured out from older episodes via
+                        # detect_lang_from_files, and only if that fails does the
+                        # run reach the prompt/auto-reject paths below.
+                        effective_lang = other
+                        direct, actual_lang, _ = get_direct_link(client, anime_id, ep['session'], quality, effective_lang)
                     elif getattr(config, 'AUTO_REJECT_LANGUAGE_FALLBACK', False) or parallel > 1:
                         # Auto-skip if in parallel mode to avoid interactive mess
                         ans = 'n'
