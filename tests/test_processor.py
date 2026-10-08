@@ -52,6 +52,11 @@ class TestProcessor(unittest.TestCase):
         self.mock_db_save_tracked = start_patch("modules.db.save_tracked")
         self.mock_db_update_checked = start_patch("modules.db.update_last_checked")
 
+        # Patch my_idm functions
+        self.mock_reset_backlog = start_patch("modules.processor.reset_backlog_entries")
+        self.mock_add_backlog = start_patch("modules.processor.add_backlog_entry")
+        self.mock_write_backlog = start_patch("modules.processor.write_backlog_entries", return_value=True)
+
         # Patch system libraries
         self.mock_input = start_patch("builtins.input")
         self.mock_mtime = start_patch("os.path.getmtime", return_value=1700000000.0)
@@ -421,8 +426,11 @@ class TestProcessor(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(self.mock_download.call_count, 2)
 
-    @patch("modules.my_idm.add_to_my_idm_backlog", return_value=True)
-    def test_process_one_folder_routes_to_my_idm(self, mock_add_backlog):
+    def test_process_one_folder_routes_to_my_idm(self):
+        import modules.my_idm
+        # Patch the module's attributes directly
+        modules.my_idm.add_backlog_entry = self.mock_add_backlog
+        modules.my_idm.write_backlog_entries = self.mock_write_backlog
         config.USE_MY_IDM = True
         try:
             mock_client = MagicMock()
@@ -445,20 +453,25 @@ class TestProcessor(unittest.TestCase):
             )
 
             self.assertTrue(success)
-            mock_add_backlog.assert_called_once_with(
+            self.mock_add_backlog.assert_called_once_with(
                 "https://owocdn.top/file.mp4",
                 filename="AnimePahe_Frieren_-_01_720p_EngDub.mp4",
                 title="Frieren",
                 ep_num=1,
-                save_path=r"D:\Downloads\ANIME\Frieren"
+                save_path=r"D:\Downloads\ANIME\Frieren",
+                anime_url="https://animepahe.com/anime/anime_123"
             )
+            self.mock_write_backlog.assert_called_once()
             # download_file should NOT be called
             self.mock_download.assert_not_called()
         finally:
             config.USE_MY_IDM = False
 
-    @patch("modules.my_idm.add_to_my_idm_backlog", return_value=True)
-    def test_process_one_folder_routes_to_my_idm_with_renamed_pattern(self, mock_add_backlog):
+    def test_process_one_folder_routes_to_my_idm_with_renamed_pattern(self):
+        import modules.my_idm
+        # Patch the module's attributes directly
+        modules.my_idm.add_backlog_entry = self.mock_add_backlog
+        modules.my_idm.write_backlog_entries = self.mock_write_backlog
         config.USE_MY_IDM = True
         try:
             mock_client = MagicMock()
@@ -487,13 +500,15 @@ class TestProcessor(unittest.TestCase):
 
             self.assertTrue(success)
             # Should send renamed pattern filename "Frieren - 02.mp4", not website generated name!
-            mock_add_backlog.assert_called_once_with(
+            self.mock_add_backlog.assert_called_once_with(
                 "https://owocdn.top/file2.mp4",
                 filename="Frieren - 02.mp4",
                 title="Frieren",
                 ep_num=2,
-                save_path=r"D:\Downloads\ANIME\Frieren"
+                save_path=r"D:\Downloads\ANIME\Frieren",
+                anime_url="https://animepahe.com/anime/anime_123"
             )
+            self.mock_write_backlog.assert_called_once()
             self.mock_download.assert_not_called()
         finally:
             config.USE_MY_IDM = False

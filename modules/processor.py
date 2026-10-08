@@ -18,10 +18,13 @@ from .utils import log_debug, detect_lang_from_files, get_latest_episode_local, 
 from .db import update_last_checked, save_tracked, get_tracked
 from .scraper import search_anime, get_direct_link, resolve_kwik_direct
 from .downloader import download_file
+from .my_idm import reset_backlog_entries, add_backlog_entry, write_backlog_entries
 
 def process_one_folder(client, folder_path, anime_id=None, anime_title=None, quality="720p", lang=None, episodes_filter=None, parallel=1):
     scraper = cloudscraper.create_scraper(browser={'browser': 'firefox', 'platform': 'windows', 'mobile': False})
     pos_lock = threading.Lock()
+    reset_backlog_entries()
+    anime_page_url = f"{config.ANIMEPAHE_URL}/anime/{anime_id}" if anime_id else None
     if not anime_id:
         folder_name = os.path.basename(folder_path)
         # Normalize folder name colons for query
@@ -443,14 +446,9 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                 if getattr(config, 'USE_MY_IDM', False):
                     if is_first and start_event:
                         start_event.set()
-                    from .my_idm import add_to_my_idm_backlog
-                    added = add_to_my_idm_backlog(direct, filename=filename, title=anime_title, ep_num=ep_num, save_path=folder_path)
-                    if added:
-                        safe_print(f"    - Queued to My-IDM backlog: {filename} -> {folder_path}")
-                    else:
-                        safe_print(f"    - Already in My-IDM backlog: {filename}")
-                    
-                    
+                    from .my_idm import add_backlog_entry
+                    add_backlog_entry(direct, filename=filename, title=anime_title, ep_num=ep_num, save_path=folder_path, anime_url=anime_page_url)
+                    safe_print(f"    - Queued to My-IDM backlog: {filename} -> {folder_path}")
                     
                     from .db import get_tracked, save_tracked
                     t_info = get_tracked(folder_path)
@@ -547,6 +545,10 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
             for ep in new_episodes:
                 _process_single_episode(ep)
                 if abort_all.is_set(): break
+
+        # Write all collected backlog entries at once (batch write)
+        if getattr(config, 'USE_MY_IDM', False):
+            write_backlog_entries()
 
         update_last_checked(folder_path)
         return True, anime_id, anime_title
