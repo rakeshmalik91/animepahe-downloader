@@ -14,7 +14,7 @@ import threading
 from datetime import datetime
 import config
 
-from .utils import log_debug, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror
+from .utils import log_debug, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror, extract_season_number
 
 class KwikDecoder:
     """Helper to decode Kwik's obfuscated JavaScript links."""
@@ -789,8 +789,7 @@ def search_anime(client, query, return_all=False):
     best_dist = float('inf')
     
     # Extract target season from query
-    q_s_match = re.search(r'(?:Season|S)\s*(\d+)', query, re.IGNORECASE)
-    q_s = q_s_match.group(1) if q_s_match else None
+    q_s = extract_season_number(query)
     
     q_lower = query.lower()
     # Clean query for distance: remove symbols and normalize spaces
@@ -827,21 +826,23 @@ def search_anime(client, query, return_all=False):
             dist -= 10
         
         # Detect season in result
-        res_s_match = re.search(r'(?:Season|S)\s*(\d+)', item_title, re.IGNORECASE)
+        res_s = extract_season_number(item_title)
         # If item title has no season number, we assume it's Season 1 / Base Title
-        res_s = res_s_match.group(1) if res_s_match else "1"
+        if res_s is None:
+            res_s = 1
+        res_has_season = res_s != 1  # True if result explicitly has a season number > 1
         
         # Match Logic:
         # 1. If query specified a season (e.g. "Season 1"), and result is different number (e.g. "Season 2"), penalize.
         # 2. If query specified "Season 1", and result HAS NO season number, it's a very good match for base title.
-        if q_s:
+        if q_s is not None:
             if q_s != res_s:
                 dist += 100 # Heavy penalty for different season numbers
-            elif q_s == res_s and not res_s_match and q_s == "1":
+            elif q_s == res_s == 1 and not res_has_season:
                 dist -= 5 # Bonus for matching Season 1 to a base title
         else:
             # If query has no season, penalize RESULTS that have Season numbers > 1
-            if res_s != "1":
+            if res_has_season:
                 dist += 30
         
         if dist < best_dist:

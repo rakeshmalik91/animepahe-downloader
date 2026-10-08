@@ -435,6 +435,49 @@ def is_season_folder_name(name):
     ]
     return any(re.match(p, clean_name, re.IGNORECASE) for p in patterns)
 
+
+def extract_season_number(text):
+    """
+    Extract season number from various formats:
+    - "Season 3" → 3
+    - "S 3" → 3
+    - "2nd Season" → 2
+    - "Second Season" → 2
+    - "3rd Season" → 3
+    - "Third Season" → 3
+    - "Season 3 Part 2" → 3
+    Returns int or None if not found.
+    """
+    if not text:
+        return None
+    
+    text = text.strip()
+    
+    # Pattern 1: "Season N", "S N", "Season N Part M", "S N Part M"
+    match = re.search(r'(?:Season|S)\s*(\d+)', text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    
+    # Pattern 2: "Nth Season", "Nnd Season", "Nrd Season", "Nst Season"
+    match = re.search(r'(\d+)(?:st|nd|rd|th)\s*Season', text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    
+    # Pattern 3: "First Season", "Second Season", "Third Season", etc.
+    ordinal_words = {
+        'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
+        'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
+        'eleventh': 11, 'twelfth': 12, 'thirteenth': 13, 'fourteenth': 14,
+        'fifteenth': 15, 'sixteenth': 16, 'seventeenth': 17, 'eighteenth': 18,
+        'nineteenth': 19, 'twentieth': 20
+    }
+    for word, num in ordinal_words.items():
+        if re.search(rf'\b{word}\s*Season\b', text, re.IGNORECASE):
+            return num
+    
+    return None
+
+
 def parse_year_tag(start_year, end_year=None, status=None, is_ongoing=False):
     """
     Format year tag string:
@@ -601,15 +644,22 @@ def ensure_folder_year(folder_path, anime_title=None, anime_id=None, meta=None, 
         pass
 
     # 4. Extract year from title string if available
+    title_years = []
     if anime_title:
-        m_title_y = re.findall(r'\b(19|20)\d{2}\b', anime_title)
+        m_title_y = re.findall(r'\b(?:19|20)\d{2}\b', anime_title)
         for y_str in m_title_y:
+            title_years.append(int(y_str))
             years.append(int(y_str))
 
     if not years:
         return folder_path
 
-    start_year = min(years)
+    # Prioritize year from title if available (most specific to this series)
+    # Otherwise use minimum year from all sources
+    if title_years:
+        start_year = min(title_years)
+    else:
+        start_year = min(years)
     latest_year = max(years)
 
     year_tag = parse_year_tag(start_year, latest_year if not is_ongoing else None, is_ongoing=is_ongoing)

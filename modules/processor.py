@@ -14,7 +14,7 @@ import threading
 from datetime import datetime
 import config
 
-from .utils import log_debug, detect_lang_from_files, get_latest_episode_local, is_episode_already_present, send_windows_notification, ensure_working_mirror, prompt_user, ensure_folder_year, format_anime_folder_name, is_season_folder_name
+from .utils import log_debug, detect_lang_from_files, get_latest_episode_local, is_episode_already_present, send_windows_notification, ensure_working_mirror, prompt_user, ensure_folder_year, format_anime_folder_name, is_season_folder_name, extract_season_number
 from .db import update_last_checked, save_tracked, get_tracked
 from .scraper import search_anime, get_direct_link, resolve_kwik_direct
 from .downloader import download_file
@@ -74,54 +74,55 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
         rel_folder = os.path.basename(folder_path)
     tqdm.write(f"\nChecking updates for {anime_title} (id: {anime_id})\n  in '{rel_folder}' (last: {last_ep})...", file=sys.stdout)
     
-    # Silent Season Consistency Check
+# Silent Season Consistency Check
     folder_name = os.path.basename(folder_path)
     parent_name = os.path.basename(os.path.dirname(folder_path))
-    f_s_match = re.search(r'(?:Season|S)\s*(\d+)', folder_name, re.IGNORECASE)
-    if not f_s_match and parent_name:
-         f_s_match = re.search(r'(?:Season|S)\s*(\d+)', parent_name, re.IGNORECASE)
+    f_s = extract_season_number(folder_name)
+    if f_s is None and parent_name:
+         f_s = extract_season_number(parent_name)
          
-    if f_s_match:
-         f_s = f_s_match.group(1)
-         t_s_match = re.search(r'(?:Season|S)\s*(\d+)', anime_title.replace('_', ' '), re.IGNORECASE)
-         t_s = t_s_match.group(1) if t_s_match else "1"
+    if f_s is not None:
+         t_s = extract_season_number(anime_title.replace('_', ' '))
+         if t_s is None:
+             t_s = 1
          
          if f_s != t_s:
-              search_q = f"{parent_name if parent_name and len(parent_name)>3 else folder_name} {folder_name}"
-              search_q = re.sub(r'\s*\(\d{4}[^)]*\)', '', search_q).strip()
-              new_id, new_title, _, dist = search_anime(client, search_q)
-              
-              if new_id and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
-                  # This is a silent background check. If the distance is too high, 
-                  # the match is likely wrong, so just ignore it without prompting.
-                  new_id, new_title = None, None
-                  
-              if new_id and new_id != anime_id:
-                   n_s_match = re.search(r'(?:Season|S)\s*(\d+)', new_title.replace('_', ' '), re.IGNORECASE)
-                   n_s = n_s_match.group(1) if n_s_match else "1"
-                   if n_s == f_s:
-                        # Guard: verify the new title's base name is actually related to
-                        # the folder's expected anime, not just a different anime that
-                        # happens to share the same season number (e.g. "Kingdom Season 4"
-                        # vs "Re Zero Season 4").
-                        import Levenshtein as _lev
-                        new_base = re.sub(r'(?:Season|S)\s*\d+', '', new_title, flags=re.IGNORECASE).strip()
-                        expected_base = re.sub(r'(?:Season|S)\s*\d+', '', parent_name if parent_name and len(parent_name) > 3 else folder_name, flags=re.IGNORECASE)
-                        expected_base = re.sub(r'\s*\(\d{4}[^)]*\)', '', expected_base).strip()
-                        nb_norm = re.sub(r'[^a-z0-9 ]', ' ', new_base.lower()).strip()
-                        eb_norm = re.sub(r'[^a-z0-9 ]', ' ', expected_base.lower()).strip()
-                        base_dist = _lev.distance(nb_norm, eb_norm)
-                        base_threshold = getattr(config, 'MAX_DISTANCE_THRESHOLD', 20)
-                        if base_dist > base_threshold:
-                             log_debug(f"Season consistency check: rejected '{new_title}' for '{folder_name}' "
-                                       f"(base title distance {base_dist} > {base_threshold}: '{nb_norm}' vs '{eb_norm}')")
-                        else:
-                             tqdm.write(f"  Note: Correcting mismatched ID for '{folder_name}'.", file=sys.stdout)
-                             tqdm.write(f"        Switching from '{anime_title}' -> '{new_title}'.", file=sys.stdout)
-                             save_tracked(folder_path, new_id, new_title, True)
-                             anime_id, anime_title = new_id, new_title
-                             last_ep = get_latest_episode_local(folder_path) or 0
-    
+             search_q = f"{parent_name if parent_name and len(parent_name)>3 else folder_name} {folder_name}"
+             search_q = re.sub(r'\s*\(\d{4}[^)]*\)', '', search_q).strip()
+             new_id, new_title, _, dist = search_anime(client, search_q)
+             
+             if new_id and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
+                 # This is a silent background check. If the distance is too high, 
+                 # the match is likely wrong, so just ignore it without prompting.
+                 new_id, new_title = None, None
+             
+             if new_id and new_id != anime_id:
+                 n_s = extract_season_number(new_title.replace('_', ' '))
+                 if n_s is None:
+                     n_s = 1
+                 if n_s == f_s:
+                     # Guard: verify the new title's base name is actually related to
+                     # the folder's expected anime, not just a different anime that
+                     # happens to share the same season number (e.g. "Kingdom Season 4"
+                     # vs "Re Zero Season 4").
+                     import Levenshtein as _lev
+                     new_base = re.sub(r'(?:Season|S)\s*\d+', '', new_title, flags=re.IGNORECASE).strip()
+                     expected_base = re.sub(r'(?:Season|S)\s*\d+', '', parent_name if parent_name and len(parent_name) > 3 else folder_name, flags=re.IGNORECASE)
+                     expected_base = re.sub(r'\s*\(\d{4}[^)]*\)', '', expected_base).strip()
+                     nb_norm = re.sub(r'[^a-z0-9 ]', ' ', new_base.lower()).strip()
+                     eb_norm = re.sub(r'[^a-z0-9 ]', ' ', expected_base.lower()).strip()
+                     base_dist = _lev.distance(nb_norm, eb_norm)
+                     base_threshold = getattr(config, 'MAX_DISTANCE_THRESHOLD', 20)
+                     if base_dist > base_threshold:
+                          log_debug(f"Season consistency check: rejected '{new_title}' for '{folder_name}' "
+                                    f"(base title distance {base_dist} > {base_threshold}: '{nb_norm}' vs '{eb_norm}')")
+                     else:
+                          tqdm.write(f"  Note: Correcting mismatched ID for '{folder_name}'.", file=sys.stdout)
+                          tqdm.write(f"        Switching from '{anime_title}' -> '{new_title}'.", file=sys.stdout)
+                          save_tracked(folder_path, new_id, new_title, True)
+                          anime_id, anime_title = new_id, new_title
+                          last_ep = get_latest_episode_local(folder_path) or 0
+
     try:
         anime_page_url = f"{config.ANIMEPAHE_URL}/anime/{anime_id}"
         api_url = f"{config.ANIMEPAHE_URL}/api?m=release&id={anime_id}&sort=episode_desc&page=1"
@@ -412,15 +413,11 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                             direct, actual_lang, _ = get_direct_link(client, anime_id, ep['session'], quality, effective_lang)
                         else:
                             safe_print(f"    - Skipped (no {effective_lang} available).")
-                            if getattr(config, 'ENABLE_NOTIFICATIONS', True):
-                                send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num}: no {effective_lang} available", folder_path)
                             return
                     elif getattr(config, 'AUTO_REJECT_LANGUAGE_FALLBACK', False) or parallel > 1:
                         # Auto-skip if in parallel mode to avoid interactive mess
                         ans = 'n'
                         safe_print(f"    - Skipped (no {effective_lang} available).")
-                        if getattr(config, 'ENABLE_NOTIFICATIONS', True):
-                            send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num}: no {effective_lang} available", folder_path)
                         return
                     else:
                         lang_label = 'English dub' if other == 'en' else 'Japanese sub'
@@ -429,8 +426,6 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                             direct, actual_lang, _ = get_direct_link(client, anime_id, ep['session'], quality, other)
                         else:
                             safe_print(f"    - Skipped (no {effective_lang} available).")
-                            if getattr(config, 'ENABLE_NOTIFICATIONS', True):
-                                send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num}: no {effective_lang} available", folder_path)
                             return
 
             if direct:
