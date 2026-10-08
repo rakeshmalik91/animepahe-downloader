@@ -382,6 +382,8 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
             
             if is_episode_already_present(folder_path, ep_num, anime_title):
                 safe_print(f"    - Episode {ep_num} already present (detected in subfolder). Skipping.")
+                if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                    send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num} already present", folder_path)
                 return
                 
             if not is_first and start_event:
@@ -407,11 +409,15 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                             direct, actual_lang, _ = get_direct_link(client, anime_id, ep['session'], quality, effective_lang)
                         else:
                             safe_print(f"    - Skipped (no {effective_lang} available).")
+                            if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                                send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num}: no {effective_lang} available", folder_path)
                             return
                     elif getattr(config, 'AUTO_REJECT_LANGUAGE_FALLBACK', False) or parallel > 1:
                         # Auto-skip if in parallel mode to avoid interactive mess
                         ans = 'n'
                         safe_print(f"    - Skipped (no {effective_lang} available).")
+                        if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                            send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num}: no {effective_lang} available", folder_path)
                         return
                     else:
                         lang_label = 'English dub' if other == 'en' else 'Japanese sub'
@@ -420,6 +426,8 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                             direct, actual_lang, _ = get_direct_link(client, anime_id, ep['session'], quality, other)
                         else:
                             safe_print(f"    - Skipped (no {effective_lang} available).")
+                            if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                                send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num}: no {effective_lang} available", folder_path)
                             return
 
             if direct:
@@ -442,8 +450,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                     else:
                         safe_print(f"    - Already in My-IDM backlog: {filename}")
                     
-                    if getattr(config, 'ENABLE_NOTIFICATIONS', True):
-                        send_windows_notification("Queued in My-IDM", f"{anime_title} - Episode {ep_num}", folder_path)
+                    
                     
                     from .db import get_tracked, save_tracked
                     t_info = get_tracked(folder_path)
@@ -490,13 +497,25 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                             if ans == 'r':
                                 retry_count = 0; direct, _, _ = get_direct_link(client, anime_id, ep['session'], quality, actual_lang); continue
                             elif ans == 'f':
+                                if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                                    send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: forever skipped", folder_path)
                                 save_tracked(folder_path, anime_id, anime_title, False)
                                 abort_all.set(); return
                             elif ans == 'q':
+                                if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                                    send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: user quit", folder_path)
                                 abort_all.set(); return
+                            elif ans == 's':
+                                if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                                    send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num}: user skipped", folder_path)
+                        else:
+                            if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                                send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: failed after retries", folder_path)
                         break
             else:
                 safe_print(f"    - Extraction failed for Episode {ep_num}.")
+                if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                    send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: extraction failed", folder_path)
 
         if parallel > 1:
             tqdm.write(f"  Downloading in parallel (limit: {parallel})...", file=sys.stdout)
