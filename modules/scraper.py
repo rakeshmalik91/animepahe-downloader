@@ -620,6 +620,7 @@ def fetch_anilist_kitsu_titles(client, query):
         if res.status_code == 200:
             data = res.json().get("data", {}).get("Media") or {}
             title_obj = data.get("title") or {}
+            log_debug(f"[ANILIST DEBUG] Query: '{query}' -> english='{title_obj.get('english')}', romaji='{title_obj.get('romaji')}', synonyms={data.get('synonyms')}")
             if title_obj.get("english"):
                 alt_titles.add(title_obj["english"])
             if title_obj.get("romaji"):
@@ -638,6 +639,7 @@ def fetch_anilist_kitsu_titles(client, query):
                 data = res.json().get("data", [])
                 if data:
                     attrs = data[0].get("attributes") or {}
+                    log_debug(f"[KITSU DEBUG] Query: '{query}' -> canonicalTitle='{attrs.get('canonicalTitle')}', abbreviatedTitles={attrs.get('abbreviatedTitles')}")
                     if attrs.get("canonicalTitle"):
                         alt_titles.add(attrs["canonicalTitle"])
                     for ab in attrs.get("abbreviatedTitles") or []:
@@ -681,6 +683,7 @@ def search_anime(client, query, return_all=False):
         if res.status_code == 200:
             try:
                 data = res.json()
+                log_debug(f"[ANIMEPAHE SEARCH DEBUG] Query: '{query}' -> {len(data.get('data', []))} results")
                 api_ok = True
                 if data and data.get('data'):
                     all_data.extend(data['data'])
@@ -736,6 +739,7 @@ def search_anime(client, query, return_all=False):
                                 
                             if jdata and jdata.get('data'):
                                 anime_info = jdata['data'][0]
+                                log_debug(f"[JIKAN DEBUG] Response for '{query}': title_english='{anime_info.get('title_english')}', title_synonyms={anime_info.get('title_synonyms')}")
                                 if anime_info.get('title_english'):
                                     alt_titles.add(anime_info['title_english'])
                                 if anime_info.get('title_synonyms'):
@@ -761,21 +765,23 @@ def search_anime(client, query, return_all=False):
                             alt_res = client.get(alt_url, headers={"X-Requested-With": "XMLHttpRequest"})
                             if alt_res.status_code == 200:
                                 alt_data = alt_res.json()
+                                log_debug(f"[ALT SEARCH DEBUG] '{alt_clean}' -> {len(alt_data.get('data', []))} results")
                                 if alt_data and alt_data.get('data'):
                                     for aitem in alt_data['data']:
                                         asid = aitem.get('session')
                                         if asid and asid not in seen_ids:
                                             seen_ids.add(asid)
                                             all_data.append(aitem)
+                                            log_debug(f"  Added alt result: session={asid} title='{aitem.get('title')}'")
                         except Exception as e:
-                            pass
+                            log_debug(f"Alt search error for '{alt_clean}': {e}")
             
     if not api_ok:
         return ([], False) if return_all else (None, None, False, float('inf'))
         
     if not all_data:
         return ([], True) if return_all else (None, None, True, float('inf'))
-    
+
     if return_all:
         results = []
         for item in all_data:
@@ -805,6 +811,7 @@ def search_anime(client, query, return_all=False):
         t_clean = re.sub(r'\s+', ' ', t_clean)
         
         dist = Levenshtein.distance(q_clean, t_clean)
+        raw_dist = dist
         
         # Detect type in result
         item_type = str(item.get('type') or '').lower()
@@ -813,17 +820,22 @@ def search_anime(client, query, return_all=False):
         
         q_is_movie = any(x in q_lower for x in ['movie', 'movie:', 'the movie'])
         q_is_sp = bool(re.search(r'\b(?:special|ova|ona|specials|episode one)\b', q_lower))
-
-        # Type penalties/bonuses
-        if is_movie and not q_is_movie:
-            dist += 60 # Very heavy penalty to avoid movies for series folders
-        if is_sp and not q_is_sp:
-            dist += 40
+        
+        # Exact match check - if query matches result exactly after cleaning, skip type penalties
+        exact_match = (q_clean == t_clean)
+        substring_match = (q_clean in t_clean)
+        
+        # Type penalties/bonuses (skip if exact match - user clearly wants this title)
+        if not exact_match:
+            if is_movie and not q_is_movie:
+                dist += 60 # Very heavy penalty to avoid movies for series folders
+            if is_sp and not q_is_sp:
+                dist += 40
         
         # Substring/Exact word match bonus
-        if q_clean == t_clean:
+        if exact_match:
             dist -= 20
-        elif q_clean in t_clean:
+        elif substring_match:
             dist -= 10
         
         # Detect season in result
@@ -846,6 +858,8 @@ def search_anime(client, query, return_all=False):
             if res_has_season:
                 dist += 30
         
+        log_debug(f"  [MATCH DEBUG] item='{item_title_raw}' q_clean='{q_clean}' t_clean='{t_clean}' raw_dist={raw_dist} final_dist={dist} (type={'movie' if is_movie else 'sp' if is_sp else 'tv'})")
+        
         if dist < best_dist:
             best_dist = dist
             best_match = item
@@ -854,6 +868,7 @@ def search_anime(client, query, return_all=False):
     
     anime_id = best_match.get('session')
     title = best_match.get('title')
+    log_debug(f"[MATCH RESULT] Selected: '{title}' (session={anime_id}) with dist={best_dist}")
     # Replace both colons for filenames/folders
     clean_title = re.sub(r'[\\/*?:"<>|：]', ' ', title)
     clean_title = re.sub(r'\s+', ' ', clean_title).strip()
