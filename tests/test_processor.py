@@ -9,7 +9,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
-from modules.processor import process_one_folder
+from modules.processor import process_one_folder, retry_failed_tasks
 
 class TestProcessor(unittest.TestCase):
 
@@ -46,6 +46,10 @@ class TestProcessor(unittest.TestCase):
         self.mock_direct_link = start_patch("modules.processor.get_direct_link")
         self.mock_download = start_patch("modules.processor.download_file", return_value=True)
         self.mock_ensure_mirror = start_patch("modules.processor.ensure_working_mirror", return_value=True)
+        self.mock_record_failed = start_patch("modules.processor.record_failed_episode", return_value=True)
+        self.mock_remove_failed = start_patch("modules.processor.remove_failed_episode", return_value=True)
+        self.mock_get_failed = start_patch("modules.processor.get_failed_episodes", return_value=[])
+        self.mock_clear_failed = start_patch("modules.processor.clear_failed_episodes_for_folder", return_value=True)
 
         # Patch original database functions to override local imports inside nested functions
         self.mock_db_get_tracked = start_patch("modules.db.get_tracked", return_value=None)
@@ -557,6 +561,169 @@ class TestProcessor(unittest.TestCase):
             self.mock_download.assert_not_called()
         finally:
             config.USE_MY_IDM = False
+
+    def test_retry_pass_succeeds_at_end_of_task(self):
+        # Episode 1 fails extraction on 1st call, succeeds on retry pass (2nd call)
+        self.mock_latest_ep.return_value = 0
+        self.mock_direct_link.side_effect = [
+            (None, None, None), # Initial pass fails
+            ("https://owocdn.top/file1.mp4", "en", {"en"}) # Retry pass succeeds
+        ]
+
+        mock_client = MagicMock()
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "data": [{"episode": 1, "session": "sess_1"}]
+        }
+        mock_client.get.return_value = mock_res
+
+        success, anime_id, anime_title = process_one_folder(
+            mock_client,
+            r"D:\Downloads\ANIME\Frieren",
+            anime_id="anime_123",
+            anime_title="Frieren",
+            parallel=1
+        )
+
+        self.assertTrue(success)
+        self.assertEqual(self.mock_direct_link.call_count, 2)
+        self.mock_download.assert_called_once()
+        self.mock_remove_failed.assert_called_with(r"D:\Downloads\ANIME\Frieren", 1)
+        self.mock_record_failed.assert_not_called()
+
+    def test_episode_fails_retry_pass_recorded_in_db(self):
+        # Episode 1 fails extraction on both passes
+        self.mock_latest_ep.return_value = 0
+        self.mock_direct_link.return_value = (None, None, None)
+
+        mock_client = MagicMock()
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "data": [{"episode": 1, "session": "sess_1"}]
+        }
+        mock_client.get.return_value = mock_res
+
+        success, anime_id, anime_title = process_one_folder(
+            mock_client,
+            r"D:\Downloads\ANIME\Frieren",
+            anime_id="anime_123",
+            anime_title="Frieren",
+            parallel=1
+        )
+
+        self.assertTrue(success)
+        # Should attempt initial pass + retry pass = 2 attempts
+        self.assertEqual(self.mock_direct_link.call_count, 2)
+        self.mock_download.assert_not_called()
+        # Recorded to DB because it still failed
+        self.mock_record_failed.assert_called_once_with(
+            folder_path=r"D:\Downloads\ANIME\Frieren",
+            anime_id="anime_123",
+            anime_title="Frieren",
+            episode_num=1,
+            session="sess_1",
+            quality="720p",
+            lang="en",
+            error_message="extraction_failed"
+        )
+
+    def test_db_failed_episodes_included_when_less_than_last_ep(self):
+        # Episode 3 is in DB as failed, while local latest_ep is 5
+        self.mock_latest_ep.return_value = 5
+        self.mock_get_failed.return_value = [{'episode_num': 3}]
+        self.mock_direct_link.return_value = ("https://owocdn.top/file.mp4", "en", {"en"})
+
+        mock_client = MagicMock()
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "data": [
+                {"episode": 3, "session": "sess_3"},
+                {"episode": 4, "session": "sess_4"},
+                {"episode": 5, "session": "sess_5"},
+                {"episode": 6, "session": "sess_6"}
+            ]
+        }
+        mock_client.get.return_value = mock_res
+
+        success, anime_id, anime_title = process_one_folder(
+            mock_client,
+            r"D:\Downloads\ANIME\Frieren",
+            anime_id="anime_123",
+            anime_title="Frieren",
+            parallel=1
+        )
+
+        self.assertTrue(success)
+        # Should process ep 3 (from DB) and ep 6 (> 5), but not 4 or 5
+        self.assertEqual(self.mock_direct_link.call_count, 2)
+        called_sessions = [c[0][2] for c in self.mock_direct_link.call_args_list]
+        self.assertEqual(called_sessions, ["sess_3", "sess_6"])
+
+    def test_retry_failed_tasks_workflow(self):
+        failed_records = [
+            {
+                'folder_path': r"D:\Downloads\ANIME\NonExistent",
+                'anime_id': "aid_1",
+                'anime_title': "NonExistent",
+                'episode_num': 1,
+                'quality': "720p",
+                'lang': "en"
+            },
+            {
+                'folder_path': r"D:\Downloads\ANIME\Exists",
+                'anime_id': "aid_2",
+                'anime_title': "Exists",
+                'episode_num': 2,
+                'quality': "720p",
+                'lang': "en"
+            },
+            {
+                'folder_path': r"D:\Downloads\ANIME\Exists",
+                'anime_id': "aid_2",
+                'anime_title': "Exists",
+                'episode_num': 3,
+                'quality': "720p",
+                'lang': "en"
+            }
+        ]
+        self.mock_get_failed.return_value = failed_records
+
+        # NonExistent folder does not exist, Exists folder exists
+        def fake_exists(p):
+            return "Exists" in p
+        self.mock_exists.side_effect = fake_exists
+
+        # In Exists folder, ep 2 is already present, ep 3 is not
+        def fake_ep_present(folder, ep_num, title):
+            return ep_num == 2
+        self.mock_ep_present.side_effect = fake_ep_present
+
+        mock_client = MagicMock()
+        with patch("modules.processor.process_one_folder") as mock_process:
+            retried = retry_failed_tasks(mock_client)
+
+            # NonExistent should be cleared
+            self.mock_clear_failed.assert_called_once_with(r"D:\Downloads\ANIME\NonExistent")
+
+            # Episode 2 should be removed because file exists
+            self.mock_remove_failed.assert_called_with(r"D:\Downloads\ANIME\Exists", 2)
+
+            # process_one_folder called only for ep 3
+            mock_process.assert_called_once_with(
+                client=mock_client,
+                folder_path=r"D:\Downloads\ANIME\Exists",
+                anime_id="aid_2",
+                anime_title="Exists",
+                quality="720p",
+                lang="en",
+                episodes_filter=[3],
+                parallel=1,
+                ignore_db_failures=True
+            )
+            self.assertIn(r"D:\Downloads\ANIME\Exists", retried)
 
 if __name__ == "__main__":
     unittest.main()

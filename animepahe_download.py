@@ -77,7 +77,7 @@ if config.FORCE_IPV4:
 from modules.utils import log_debug, normalize_path, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror, prompt_user, ensure_folder_year, format_anime_folder_name, is_season_folder_name, parse_year_tag
 from modules.db import init_db, get_folder_by_id, get_tracked, save_tracked, cleanup_db
 from modules.scraper import search_anime
-from modules.processor import process_one_folder
+from modules.processor import process_one_folder, retry_failed_tasks
 
 def main(cli_args=None):
     init_db()
@@ -103,6 +103,7 @@ def main(cli_args=None):
     parser.add_argument("--my-idm", dest="use_my_idm", action="store_true", default=None, help="Forward downloads to My-IDM backlog")
     parser.add_argument("--no-my-idm", dest="use_my_idm", action="store_false", help="Disable forwarding downloads to My-IDM backlog")
     parser.add_argument("--my-idm-dir", help="Path to My-IDM repository directory")
+    parser.add_argument("--retry-failed", action="store_true", help="Retry previously failed episode downloads recorded in database")
     
     args = parser.parse_args(cli_args)
     
@@ -225,6 +226,14 @@ def main(cli_args=None):
     jk_display = getattr(config, 'JIKAN_API_URL', 'Down').replace('https://', '')
     tqdm.write(f"--- AnimePahe Downloader (Using: {ap_display} | Kwik: {kw_display} | Jikan: {jk_display}) ---", file=sys.stdout)
     
+    if args.retry_failed:
+        try:
+            retry_failed_tasks(client, quality=args.quality, lang=args.lang, parallel=args.parallel)
+        finally:
+            cleanup_db()
+            client.close()
+        return
+
     if args.more_seasons or args.new_seasons:
         if args.name:
             target_names = [n.strip().lower() for n in args.name.split(',') if n.strip()]
@@ -544,6 +553,9 @@ def main(cli_args=None):
     else:
         # If no specific name was provided, perform a full library scan/update
         # This allows --new-seasons to discovery things and then the scan to update them
+        # Pick up earlier failed tasks from DB (discarding nonexistent folders and already-completed files)
+        retried_folders = retry_failed_tasks(client, quality=args.quality, lang=args.lang, parallel=args.parallel)
+
         tqdm.write(f"Scanning base folder: {config.BASE_DOWNLOAD_DIR}", file=sys.stdout)
         for root, dirs, files in os.walk(config.BASE_DOWNLOAD_DIR):
             depth = root[len(config.BASE_DOWNLOAD_DIR):].count(os.sep)
@@ -558,7 +570,10 @@ def main(cli_args=None):
                 if auto == 1:
                     scan_delay = getattr(config, 'REQUEST_DELAY', 0.5)
                     if scan_delay: time.sleep(scan_delay)
-                    success, final_aid, final_title = process_one_folder(client, folder_path, aid, title, args.quality, args.lang, episodes_filter=target_episodes, parallel=args.parallel)
+                    proc_kwargs = {'episodes_filter': target_episodes, 'parallel': args.parallel}
+                    if folder_path in retried_folders:
+                        proc_kwargs['ignore_db_failures'] = True
+                    success, final_aid, final_title = process_one_folder(client, folder_path, aid, title, args.quality, args.lang, **proc_kwargs)
                     if success and final_aid and final_title and (final_aid != aid or final_title != title):
                         save_tracked(folder_path, final_aid, final_title, True)
                     continue

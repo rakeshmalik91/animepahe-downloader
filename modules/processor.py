@@ -15,12 +15,12 @@ from datetime import datetime
 import config
 
 from .utils import log_debug, detect_lang_from_files, get_latest_episode_local, is_episode_already_present, send_windows_notification, ensure_working_mirror, prompt_user, ensure_folder_year, format_anime_folder_name, is_season_folder_name, extract_season_number
-from .db import update_last_checked, save_tracked, get_tracked
+from .db import update_last_checked, save_tracked, get_tracked, record_failed_episode, remove_failed_episode, get_failed_episodes, clear_failed_episodes_for_folder
 from .scraper import search_anime, get_direct_link, resolve_kwik_direct
 from .downloader import download_file
 from .my_idm import reset_backlog_entries, add_backlog_entry, write_backlog_entries
 
-def process_one_folder(client, folder_path, anime_id=None, anime_title=None, quality="720p", lang=None, episodes_filter=None, parallel=1):
+def process_one_folder(client, folder_path, anime_id=None, anime_title=None, quality="720p", lang=None, episodes_filter=None, parallel=1, ignore_db_failures=False):
     scraper = cloudscraper.create_scraper(browser={'browser': 'firefox', 'platform': 'windows', 'mobile': False})
     pos_lock = threading.Lock()
     reset_backlog_entries()
@@ -239,7 +239,9 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
         if episodes_filter:
             new_episodes = [ep for ep in episodes if get_ep_num(ep) in episodes_filter]
         else:
-            new_episodes = [ep for ep in episodes if get_ep_num(ep) > last_ep]
+            failed_entries = get_failed_episodes(folder_path) if not ignore_db_failures else []
+            failed_ep_nums = {entry['episode_num'] for entry in failed_entries}
+            new_episodes = [ep for ep in episodes if (get_ep_num(ep) > last_ep or get_ep_num(ep) in failed_ep_nums)]
         
         if not new_episodes:
             from datetime import datetime, timedelta
@@ -372,14 +374,14 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
         
         def _process_single_episode(ep, position=None, is_first=False, start_event=None):
             try:
-                _process_single_episode_impl(ep, position, is_first, start_event)
+                return _process_single_episode_impl(ep, position, is_first, start_event)
             finally:
                 if is_first and start_event:
                     start_event.set()
 
-        def _process_single_episode_impl(ep, position=None, is_first=False, start_event=None):
+        def _process_single_episode_impl(ep, position=None, is_first=False, start_event=None, is_retry=False):
             nonlocal effective_lang, is_default_fallback
-            if abort_all.is_set(): return
+            if abort_all.is_set(): return False, "aborted"
             ep_num = ep['episode']
             
             def safe_print(msg):
@@ -393,7 +395,8 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                 safe_print(f"    - Episode {ep_num} already present (detected in subfolder). Skipping.")
                 if getattr(config, 'ENABLE_NOTIFICATIONS', True):
                     send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num} already present", folder_path)
-                return
+                remove_failed_episode(folder_path, ep_num)
+                return True, "already_present"
                 
             if not is_first and start_event:
                 start_event.wait()
@@ -422,7 +425,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                         # Auto-skip if in parallel mode to avoid interactive mess
                         ans = 'n'
                         safe_print(f"    - Skipped (no {effective_lang} available).")
-                        return
+                        return False, f"language_{effective_lang}_unavailable"
                     else:
                         lang_label = 'English dub' if other == 'en' else 'Japanese sub'
                         ans = prompt_user(f"    - {effective_lang} not available. Download {lang_label} instead? [y/n]: ").lower()
@@ -430,7 +433,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                             direct, actual_lang, _ = get_direct_link(client, anime_id, ep['session'], quality, other)
                         else:
                             safe_print(f"    - Skipped (no {effective_lang} available).")
-                            return
+                            return False, f"language_{effective_lang}_unavailable"
 
             if direct:
                 if name_prefix is not None and name_suffix is not None:
@@ -453,7 +456,8 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                     t_info = get_tracked(folder_path)
                     if not t_info or t_info[0] != anime_id:
                         save_tracked(folder_path, anime_id, anime_title, True)
-                    return
+                    remove_failed_episode(folder_path, ep_num)
+                    return True, "queued_my_idm"
                 
                 retry_count = 0
                 max_retries = getattr(config, 'MAX_DOWNLOAD_RETRIES', 5)
@@ -471,7 +475,8 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                         t_info = get_tracked(folder_path)
                         if not t_info or t_info[0] != anime_id:
                             save_tracked(folder_path, anime_id, anime_title, True)
-                        break
+                        remove_failed_episode(folder_path, ep_num)
+                        return True, "downloaded"
                     else:
                         if retry_count < max_retries:
                             retry_count += 1
@@ -487,7 +492,11 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                             if not direct: break
                             continue
                         
-                        if parallel == 1:
+                        if is_retry:
+                            if getattr(config, 'ENABLE_NOTIFICATIONS', True):
+                                send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: failed on retry", folder_path)
+                            return False, "download_failed"
+                        elif parallel == 1:
                             if getattr(config, 'OPEN_BROWSER_ON_FAIL', False):
                                 webbrowser.open(direct)
                             ans = prompt_user(f"    - Episode {ep_num} download failed. [r(etry)/s(kip)/f(orever-skip)/q(uit)]: ").lower()
@@ -497,22 +506,28 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                                 if getattr(config, 'ENABLE_NOTIFICATIONS', True):
                                     send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: forever skipped", folder_path)
                                 save_tracked(folder_path, anime_id, anime_title, False)
-                                abort_all.set(); return
+                                abort_all.set(); return False, "forever_skip"
                             elif ans == 'q':
                                 if getattr(config, 'ENABLE_NOTIFICATIONS', True):
                                     send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: user quit", folder_path)
-                                abort_all.set(); return
+                                abort_all.set(); return False, "quit"
                             elif ans == 's':
                                 if getattr(config, 'ENABLE_NOTIFICATIONS', True):
                                     send_windows_notification("Episode Skipped", f"{anime_title} - Episode {ep_num}: user skipped", folder_path)
+                                return False, "user_skipped"
                         else:
                             if getattr(config, 'ENABLE_NOTIFICATIONS', True):
                                 send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: failed after retries", folder_path)
                         break
+                return False, "download_failed"
             else:
                 safe_print(f"    - Extraction failed for Episode {ep_num}.")
                 if getattr(config, 'ENABLE_NOTIFICATIONS', True):
                     send_windows_notification("Download Failed", f"{anime_title} - Episode {ep_num}: extraction failed", folder_path)
+                return False, "extraction_failed"
+
+        task_failed_episodes = []
+        failed_lock = threading.Lock()
 
         if parallel > 1:
             tqdm.write(f"  Downloading in parallel (limit: {parallel})...", file=sys.stdout)
@@ -533,7 +548,10 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                         first_assigned[0] = True
 
                 try:
-                    _process_single_episode(ep, position=pos, is_first=is_first, start_event=first_started)
+                    res = _process_single_episode(ep, position=pos, is_first=is_first, start_event=first_started)
+                    if res and not res[0] and res[1] not in ("forever_skip", "quit", "aborted"):
+                        with failed_lock:
+                            task_failed_episodes.append((ep, res[1]))
                 finally:
                     with pos_lock:
                         positions.append(pos)
@@ -542,8 +560,48 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                 executor.map(_worker, new_episodes)
         else:
             for ep in new_episodes:
-                _process_single_episode(ep)
+                res = _process_single_episode(ep)
+                if res and not res[0] and res[1] not in ("forever_skip", "quit", "aborted"):
+                    task_failed_episodes.append((ep, res[1]))
                 if abort_all.is_set(): break
+
+        # Solution 1: Retrying the failed episodes again at end of whole task
+        still_failed = []
+        if task_failed_episodes and not abort_all.is_set():
+            retry_candidates = [item for item in task_failed_episodes if item[1] != "user_skipped"]
+            for item in task_failed_episodes:
+                if item[1] == "user_skipped":
+                    still_failed.append(item)
+
+            if retry_candidates:
+                tqdm.write(f"\n  [Retry Pass] Retrying {len(retry_candidates)} failed episode(s) at end of task...", file=sys.stdout)
+                for ep, prev_reason in retry_candidates:
+                    if abort_all.is_set():
+                        still_failed.append((ep, "aborted"))
+                        continue
+                    retry_res = _process_single_episode_impl(ep, is_retry=True)
+                    if retry_res and retry_res[0]:
+                        tqdm.write(f"    - Episode {ep.get('episode')} succeeded on retry!", file=sys.stdout)
+                    else:
+                        fail_reason = retry_res[1] if retry_res else prev_reason
+                        still_failed.append((ep, fail_reason))
+
+        # Solution 2: Record still-failed episodes into DB for retrying later
+        for ep, reason in still_failed:
+            if reason in ("forever_skip", "quit", "aborted"):
+                continue
+            ep_num = get_ep_num(ep)
+            record_failed_episode(
+                folder_path=folder_path,
+                anime_id=anime_id,
+                anime_title=anime_title,
+                episode_num=ep_num,
+                session=ep.get('session'),
+                quality=quality,
+                lang=effective_lang,
+                error_message=reason
+            )
+            tqdm.write(f"  [Recorded] Episode {ep_num} saved to database for retrying later ({reason}).", file=sys.stdout)
 
         # Write all collected backlog entries at once (batch write)
         if getattr(config, 'USE_MY_IDM', False):
@@ -554,4 +612,72 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
     except Exception as e:
         log_debug(f"Process folder error: {e}")
         return False, anime_id, anime_title
+
+def retry_failed_tasks(client, quality=None, lang=None, parallel=1):
+    """
+    Picks up all previously failed episodes recorded in the DB.
+    Discards tasks if the folder no longer exists or if the file already exists on disk.
+    Retries any remaining failed episodes using process_one_folder.
+    Returns the set of folder paths that were retried.
+    """
+    failed_records = get_failed_episodes()
+    if not failed_records:
+        return set()
+
+    tqdm.write(f"\n[Failed Tasks] Found {len(failed_records)} previously failed episode record(s) in DB.", file=sys.stdout)
+
+    from collections import defaultdict
+    by_folder = defaultdict(list)
+    for rec in failed_records:
+        by_folder[rec['folder_path']].append(rec)
+
+    retried_folders = set()
+
+    for folder_path, items in by_folder.items():
+        # Discard if folder does not exist
+        if not os.path.exists(folder_path):
+            tqdm.write(f"  [Discard] Folder '{folder_path}' does not exist on disk. Removing failed records.", file=sys.stdout)
+            clear_failed_episodes_for_folder(folder_path)
+            continue
+
+        anime_title = items[0].get('anime_title') or os.path.basename(folder_path)
+        anime_id = items[0].get('anime_id')
+        item_quality = quality or items[0].get('quality') or getattr(config, 'DEFAULT_QUALITY', '720p')
+        item_lang = lang or items[0].get('lang')
+
+        # Check existing tracked info if missing
+        if not anime_id or not anime_title:
+            t_info = get_tracked(folder_path)
+            if t_info:
+                if not anime_id: anime_id = t_info[0]
+                if not anime_title: anime_title = t_info[1]
+
+        # Check if files already exist on disk
+        remaining_ep_nums = []
+        for it in items:
+            ep_num = it['episode_num']
+            if is_episode_already_present(folder_path, ep_num, anime_title):
+                tqdm.write(f"  [Resolved] Episode {ep_num} for '{anime_title}' is already present on disk. Removing from DB.", file=sys.stdout)
+                remove_failed_episode(folder_path, ep_num)
+            else:
+                remaining_ep_nums.append(ep_num)
+
+        if not remaining_ep_nums:
+            continue
+
+        tqdm.write(f"\n[Retrying Failed Tasks] '{anime_title}' in '{folder_path}': Episode(s) {remaining_ep_nums}", file=sys.stdout)
+        retried_folders.add(folder_path)
+        process_one_folder(
+            client=client,
+            folder_path=folder_path,
+            anime_id=anime_id,
+            anime_title=anime_title,
+            quality=item_quality,
+            lang=item_lang,
+            episodes_filter=remaining_ep_nums,
+            parallel=parallel,
+            ignore_db_failures=True
+        )
+
+    return retried_folders
 

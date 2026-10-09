@@ -27,6 +27,10 @@ def init_db():
                  (site_type TEXT PRIMARY KEY, url TEXT, last_updated TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS settings 
                  (key TEXT PRIMARY KEY, value TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS failed_episodes 
+                 (folder_path TEXT, anime_id TEXT, anime_title TEXT, episode_num INTEGER, 
+                  session TEXT, quality TEXT, lang TEXT, failed_at TEXT, error_message TEXT,
+                  PRIMARY KEY (folder_path, episode_num))''')
     conn.commit()
     conn.close()
 
@@ -189,6 +193,12 @@ def cleanup_db():
             if not os.path.exists(folder_path):
                 c.execute("DELETE FROM tracking WHERE folder_path = ?", (folder_path,))
                 deleted_count += 1
+        c.execute("SELECT folder_path FROM failed_episodes")
+        failed_rows = c.fetchall()
+        for (f_path,) in failed_rows:
+            if f_path and not os.path.exists(f_path):
+                c.execute("DELETE FROM failed_episodes WHERE folder_path = ?", (f_path,))
+                deleted_count += 1
         conn.commit()
         conn.close()
         if deleted_count > 0:
@@ -313,5 +323,94 @@ def clear_sessions():
         return True
     except Exception as e:
         log_debug(f"DB clear_sessions error: {e}")
+        return False
+
+def record_failed_episode(folder_path, anime_id, anime_title, episode_num, session=None, quality=None, lang=None, error_message=""):
+    """Record a failed episode to database for future retry."""
+    try:
+        norm_path = os.path.abspath(folder_path) if folder_path else folder_path
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            """REPLACE INTO failed_episodes 
+               (folder_path, anime_id, anime_title, episode_num, session, quality, lang, failed_at, error_message)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (norm_path, anime_id, anime_title, int(episode_num), session, quality, lang, datetime.now().isoformat(), str(error_message))
+        )
+        conn.commit()
+        conn.close()
+        log_debug(f"Recorded failed episode {episode_num} for '{anime_title}' in DB.")
+        return True
+    except Exception as e:
+        log_debug(f"record_failed_episode error: {e}")
+        return False
+
+def remove_failed_episode(folder_path, episode_num):
+    """Remove a failed episode from database once successfully downloaded or present."""
+    try:
+        norm_path = os.path.abspath(folder_path) if folder_path else folder_path
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "DELETE FROM failed_episodes WHERE (folder_path = ? OR folder_path = ?) AND episode_num = ?",
+            (norm_path, folder_path, int(episode_num))
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        log_debug(f"remove_failed_episode error: {e}")
+        return False
+
+def get_failed_episodes(folder_path=None):
+    """Get list of failed episodes, optionally filtered by folder_path.
+    Returns list of dicts with keys: folder_path, anime_id, anime_title, episode_num, session, quality, lang, failed_at, error_message."""
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        if folder_path:
+            norm_path = os.path.abspath(folder_path)
+            c.execute(
+                """SELECT folder_path, anime_id, anime_title, episode_num, session, quality, lang, failed_at, error_message 
+                   FROM failed_episodes WHERE folder_path = ? OR folder_path = ? ORDER BY episode_num ASC""",
+                (norm_path, folder_path)
+            )
+        else:
+            c.execute(
+                """SELECT folder_path, anime_id, anime_title, episode_num, session, quality, lang, failed_at, error_message 
+                   FROM failed_episodes ORDER BY folder_path, episode_num ASC"""
+            )
+        rows = c.fetchall()
+        conn.close()
+        return [
+            {
+                "folder_path": r[0],
+                "anime_id": r[1],
+                "anime_title": r[2],
+                "episode_num": r[3],
+                "session": r[4],
+                "quality": r[5],
+                "lang": r[6],
+                "failed_at": r[7],
+                "error_message": r[8],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        log_debug(f"get_failed_episodes error: {e}")
+        return []
+
+def clear_failed_episodes_for_folder(folder_path):
+    """Clear all failed episodes for a specific folder."""
+    try:
+        norm_path = os.path.abspath(folder_path) if folder_path else folder_path
+        conn = sqlite3.connect(config.DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM failed_episodes WHERE folder_path = ? OR folder_path = ?", (norm_path, folder_path))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        log_debug(f"clear_failed_episodes_for_folder error: {e}")
         return False
 

@@ -40,6 +40,7 @@ class TestMain(unittest.TestCase):
         
         self.mock_search = start_patch("animepahe_download.search_anime")
         self.mock_process_folder = start_patch("animepahe_download.process_one_folder", return_value=(True, "anime_123", "Frieren"))
+        self.mock_retry_failed = start_patch("animepahe_download.retry_failed_tasks", return_value=set())
         
         self.mock_sqlite = start_patch("sqlite3.connect")
         self.mock_exists = start_patch("os.path.exists", return_value=False)
@@ -275,6 +276,20 @@ class TestMain(unittest.TestCase):
 
         mock_launch.assert_called_once()
         config.USE_MY_IDM = False
+
+    @patch("httpx.Client")
+    def test_main_retry_failed_flag(self, mock_client):
+        sys.argv = ["animepahe_download.py", "--retry-failed"]
+        animepahe_download.main()
+        self.mock_retry_failed.assert_called_once_with(mock_client.return_value, quality=config.DEFAULT_QUALITY, lang=None, parallel=config.DEFAULT_PARALLEL_DOWNLOADS)
+        self.mock_process_folder.assert_not_called()
+
+    @patch("httpx.Client")
+    def test_main_default_scan_retries_failed_tasks(self, mock_client):
+        sys.argv = ["animepahe_download.py"]
+        self.mock_walk.return_value = []
+        animepahe_download.main()
+        self.mock_retry_failed.assert_called_once_with(mock_client.return_value, quality=config.DEFAULT_QUALITY, lang=None, parallel=config.DEFAULT_PARALLEL_DOWNLOADS)
 
 if __name__ == "__main__":
     unittest.main()

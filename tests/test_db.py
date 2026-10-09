@@ -19,7 +19,11 @@ from modules.db import (
     get_kwik_session,
     save_kwik_session,
     get_last_working_mirror,
-    save_working_mirror
+    save_working_mirror,
+    record_failed_episode,
+    remove_failed_episode,
+    get_failed_episodes,
+    clear_failed_episodes_for_folder
 )
 
 class TestDB(unittest.TestCase):
@@ -200,6 +204,71 @@ class TestDB(unittest.TestCase):
     @patch("sqlite3.connect", side_effect=sqlite3.Error("Failed"))
     def test_save_working_mirror_exception(self, mock_connect):
         self.assertFalse(save_working_mirror("animepahe", "url"))
+
+    def test_record_and_get_failed_episodes(self):
+        folder = r"D:\downloads\anime\series1"
+        self.assertTrue(record_failed_episode(
+            folder_path=folder,
+            anime_id="aid_1",
+            anime_title="Series 1",
+            episode_num=5,
+            session="sess_5",
+            quality="1080p",
+            lang="en",
+            error_message="extraction_failed"
+        ))
+
+        # Check by folder
+        episodes = get_failed_episodes(folder)
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0]['episode_num'], 5)
+        self.assertEqual(episodes[0]['anime_id'], "aid_1")
+        self.assertEqual(episodes[0]['anime_title'], "Series 1")
+        self.assertEqual(episodes[0]['quality'], "1080p")
+        self.assertEqual(episodes[0]['lang'], "en")
+        self.assertEqual(episodes[0]['error_message'], "extraction_failed")
+
+        # Check all failed
+        all_failed = get_failed_episodes()
+        self.assertEqual(len(all_failed), 1)
+
+    def test_remove_failed_episode(self):
+        folder = r"D:\downloads\anime\series1"
+        record_failed_episode(folder, "aid_1", "Series 1", 3)
+        record_failed_episode(folder, "aid_1", "Series 1", 4)
+        self.assertEqual(len(get_failed_episodes(folder)), 2)
+
+        # Remove episode 3
+        self.assertTrue(remove_failed_episode(folder, 3))
+        remaining = get_failed_episodes(folder)
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]['episode_num'], 4)
+
+    def test_clear_failed_episodes_for_folder(self):
+        folder1 = r"D:\downloads\anime\series1"
+        folder2 = r"D:\downloads\anime\series2"
+        record_failed_episode(folder1, "aid_1", "Series 1", 1)
+        record_failed_episode(folder1, "aid_1", "Series 1", 2)
+        record_failed_episode(folder2, "aid_2", "Series 2", 1)
+
+        self.assertTrue(clear_failed_episodes_for_folder(folder1))
+        self.assertEqual(len(get_failed_episodes(folder1)), 0)
+        self.assertEqual(len(get_failed_episodes(folder2)), 1)
+
+    def test_cleanup_db_removes_nonexistent_failed_episodes(self):
+        nonexistent = os.path.join(self.scratch_dir, "nonexistent_anime_dir")
+        record_failed_episode(nonexistent, "aid_none", "None", 1)
+        self.assertEqual(len(get_failed_episodes(nonexistent)), 1)
+
+        cleanup_db()
+        self.assertEqual(len(get_failed_episodes(nonexistent)), 0)
+
+    @patch("sqlite3.connect", side_effect=sqlite3.Error("Failed"))
+    def test_failed_episodes_exceptions(self, mock_connect):
+        self.assertFalse(record_failed_episode("folder", "id", "title", 1))
+        self.assertFalse(remove_failed_episode("folder", 1))
+        self.assertEqual(get_failed_episodes("folder"), [])
+        self.assertFalse(clear_failed_episodes_for_folder("folder"))
 
 if __name__ == "__main__":
     unittest.main()

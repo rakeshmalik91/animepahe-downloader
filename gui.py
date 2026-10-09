@@ -520,6 +520,7 @@ class AnimePaheGUI:
 
         self.scan_mode_var = tk.StringVar(value="standard")
         ttk.Radiobutton(mode_frame, text="Standard Scan (Auto-update existing library)", variable=self.scan_mode_var, value="standard").pack(anchor=tk.W, pady=1)
+        ttk.Radiobutton(mode_frame, text="Retry Failed Episodes (--retry-failed: retry past download/extraction errors)", variable=self.scan_mode_var, value="retry_failed").pack(anchor=tk.W, pady=1)
         ttk.Radiobutton(mode_frame, text="Scan for More Seasons (--more-seasons: find completely untracked sequels)", variable=self.scan_mode_var, value="more_seasons").pack(anchor=tk.W, pady=1)
         ttk.Radiobutton(mode_frame, text="Scan for Newer Seasons (--new-seasons: filter strictly for higher seasons/years)", variable=self.scan_mode_var, value="new_seasons").pack(anchor=tk.W, pady=1)
 
@@ -1506,7 +1507,9 @@ class AnimePaheGUI:
     def action_start_scan(self):
         cmd_args = []
         mode = self.scan_mode_var.get()
-        if mode == "more_seasons":
+        if mode == "retry_failed":
+            cmd_args.append("--retry-failed")
+        elif mode == "more_seasons":
             cmd_args.append("--more-seasons")
         elif mode == "new_seasons":
             cmd_args.append("--new-seasons")
