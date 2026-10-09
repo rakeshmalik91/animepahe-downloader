@@ -508,7 +508,8 @@ class TestProcessor(unittest.TestCase):
                 title="Frieren",
                 ep_num=1,
                 save_path=r"D:\Downloads\ANIME\Frieren",
-                anime_url="https://animepahe.com/anime/anime_123"
+                anime_url="https://animepahe.com/anime/anime_123",
+                referer="https://animepahe.com/play/anime_123/sess_1"
             )
             self.mock_write_backlog.assert_called_once()
             # download_file should NOT be called
@@ -555,7 +556,8 @@ class TestProcessor(unittest.TestCase):
                 title="Frieren",
                 ep_num=2,
                 save_path=r"D:\Downloads\ANIME\Frieren",
-                anime_url="https://animepahe.com/anime/anime_123"
+                anime_url="https://animepahe.com/anime/anime_123",
+                referer="https://animepahe.com/play/anime_123/sess_2"
             )
             self.mock_write_backlog.assert_called_once()
             self.mock_download.assert_not_called()

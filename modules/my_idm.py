@@ -51,6 +51,7 @@ def add_backlog_entry(
     save_path: Optional[str] = None,
     queue: Optional[str] = None,
     anime_url: Optional[str] = None,
+    referer: Optional[str] = None,
 ) -> None:
     """
     Collect a backlog entry to be written later in batch.
@@ -63,6 +64,7 @@ def add_backlog_entry(
         save_path: Save directory
         queue: Queue name
         anime_url: AnimePahe anime URL (for reference in details panel)
+        referer: Referer header to use for the download (e.g. anime/play page URL)
     """
     clean_url = url.strip()
     if not clean_url:
@@ -98,6 +100,9 @@ def add_backlog_entry(
         entry_line += f" | anime_url={anime_url}"
     if title:
         entry_line += f" | anime_title={title}"
+    # Add referer header for CDN access (uwucdn.top requires proper Referer)
+    if referer:
+        entry_line += f" | referer={referer}"
 
     # Store in meta for reference
     meta: Dict[str, Any] = {}
@@ -107,6 +112,8 @@ def add_backlog_entry(
         meta["anime_title"] = title
     if ep_num is not None:
         meta["episode_num"] = ep_num
+    if referer:
+        meta["referer"] = referer
 
     _backlog_entries.append({
         "url": clean_url,
@@ -126,10 +133,9 @@ def write_backlog_entries() -> bool:
         return False
 
     backlog_path = get_my_idm_backlog_path()
-    app_backlog_path = get_default_app_backlog_path()
 
     added_any = False
-    for target_path in [backlog_path, app_backlog_path]:
+    for target_path in [backlog_path]:
         try:
             parent_dir = os.path.dirname(target_path)
             if parent_dir and not os.path.exists(parent_dir):

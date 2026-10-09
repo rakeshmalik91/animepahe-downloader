@@ -807,8 +807,9 @@ def search_anime(client, query, return_all=False):
         dist = Levenshtein.distance(q_clean, t_clean)
         
         # Detect type in result
-        is_movie = any(x in item_title for x in ['movie', 'movie:', 'the movie'])
-        is_sp = bool(re.search(r'\b(?:special|ova|ona|specials|episode one)\b', item_title))
+        item_type = str(item.get('type') or '').lower()
+        is_movie = any(x in item_title for x in ['movie', 'movie:', 'the movie']) or item_type == 'movie'
+        is_sp = bool(re.search(r'\b(?:special|ova|ona|specials|episode one)\b', item_title)) or item_type in ('special', 'ova', 'ona')
         
         q_is_movie = any(x in q_lower for x in ['movie', 'movie:', 'the movie'])
         q_is_sp = bool(re.search(r'\b(?:special|ova|ona|specials|episode one)\b', q_lower))

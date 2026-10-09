@@ -459,7 +459,8 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
                     if is_first and start_event:
                         start_event.set()
                     from .my_idm import add_backlog_entry
-                    add_backlog_entry(direct, filename=filename, title=anime_title, ep_num=ep_num, save_path=folder_path, anime_url=anime_page_url)
+                    play_url = f"{config.ANIMEPAHE_URL}/play/{anime_id}/{ep['session']}"
+                    add_backlog_entry(direct, filename=filename, title=anime_title, ep_num=ep_num, save_path=folder_path, anime_url=anime_page_url, referer=play_url)
                     safe_print(f"    - Queued to My-IDM backlog: {filename} -> {folder_path}")
                     
                     from .db import get_tracked, save_tracked
