@@ -270,5 +270,19 @@ class TestDB(unittest.TestCase):
         self.assertEqual(get_failed_episodes("folder"), [])
         self.assertFalse(clear_failed_episodes_for_folder("folder"))
 
+    def test_cleanup_db_removes_empty_folders_and_tracking_records(self):
+        empty_tracked = os.path.join(self.scratch_dir, "empty_anime_folder")
+        os.makedirs(empty_tracked, exist_ok=True)
+        save_tracked(empty_tracked, "aid_empty", "Empty Anime", True)
+        self.assertIsNotNone(get_tracked(empty_tracked))
+        self.assertTrue(os.path.exists(empty_tracked))
+
+        cleanup_db(base_dir=self.scratch_dir)
+
+        # Folder on disk should be removed
+        self.assertFalse(os.path.exists(empty_tracked))
+        # Tracking record in DB should be cleaned up
+        self.assertIsNone(get_tracked(empty_tracked))
+
 if __name__ == "__main__":
     unittest.main()

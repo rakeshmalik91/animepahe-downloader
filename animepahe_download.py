@@ -75,7 +75,7 @@ if config.FORCE_IPV4:
     urllib3_conn.allowed_gai_family = allowed_gai_family
 
 from modules.utils import log_debug, normalize_path, ensure_working_mirror, ensure_working_kwik_mirror, ensure_working_jikan_mirror, prompt_user, ensure_folder_year, format_anime_folder_name, is_season_folder_name, parse_year_tag
-from modules.db import init_db, get_folder_by_id, get_tracked, save_tracked, cleanup_db
+from modules.db import init_db, get_folder_by_id, get_tracked, save_tracked, cleanup_db, cleanup_empty_folders
 from modules.scraper import search_anime
 from modules.processor import process_one_folder, retry_failed_tasks
 

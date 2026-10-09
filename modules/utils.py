@@ -683,8 +683,68 @@ def ensure_folder_year(folder_path, anime_title=None, anime_id=None, meta=None, 
                     return os.path.join(new_anime_path, rel_sub)
             except Exception as e:
                 log_debug(f"Error renaming anime folder: {e}")
+    return folder_path
 
-    return folder_path
+
+def cleanup_empty_folders(base_dir=None) -> int:
+    """Recursively prune empty folders under base_dir (bottom-up).
+
+    Leaves base_dir itself intact. Skips protected system/repo directories.
+    Deletes harmless metadata files (like .DS_Store, Thumbs.db, desktop.ini) if
+    they are the only contents of a directory, allowing the directory to be pruned.
+    Returns the count of deleted directories.
+    """
+    if base_dir is None:
+        base_dir = getattr(config, "BASE_DOWNLOAD_DIR", None)
+
+    if not base_dir or not os.path.isdir(base_dir):
+        return 0
+
+    base_abs = os.path.abspath(base_dir)
+    ignored_files = {".ds_store", "thumbs.db", "desktop.ini"}
+    ignored_dirs = {".git", "__pycache__", ".agents", ".pytest_cache", ".kilo"}
+    removed_count = 0
+
+    try:
+        for root, dirs, files in os.walk(base_abs, topdown=False):
+            root_abs = os.path.abspath(root)
+            if root_abs == base_abs:
+                continue
+
+            # Don't touch protected/special directory trees
+            parts = [p.lower() for p in root_abs.split(os.sep)]
+            if any(p in ignored_dirs for p in parts):
+                continue
+
+            try:
+                entries = os.listdir(root_abs)
+            except OSError:
+                continue
+
+            # Check if directory is empty or only contains harmless OS junk
+            remaining = [e for e in entries if e.lower() not in ignored_files]
+            if not remaining:
+                # Remove ignored junk files first
+                for e in entries:
+                    try:
+                        os.remove(os.path.join(root_abs, e))
+                    except OSError:
+                        pass
+
+                try:
+                    os.rmdir(root_abs)
+                    removed_count += 1
+                    log_debug(f"Removed empty folder: {root_abs}")
+                except OSError as err:
+                    log_debug(f"Could not remove empty folder {root_abs}: {err}")
+
+        if removed_count > 0:
+            log_debug(f"Cleaned up {removed_count} empty folder(s).")
+            tqdm.write(f"Cleaned up {removed_count} empty folder(s).", file=sys.stdout)
+    except Exception as e:
+        log_debug(f"Error during empty folder cleanup: {e}")
+
+    return removed_count
 
 
 

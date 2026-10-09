@@ -17,7 +17,8 @@ from modules.utils import (
     send_windows_notification,
     ensure_working_mirror,
     ensure_working_kwik_mirror,
-    ensure_working_jikan_mirror
+    ensure_working_jikan_mirror,
+    cleanup_empty_folders,
 )
 
 class TestUtils(unittest.TestCase):
@@ -440,6 +441,58 @@ class TestUtils(unittest.TestCase):
             self.assertEqual(res, r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War (2022-)\Season 3 - The Calamity")
             mock_rename.assert_called_once_with(r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War", r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War (2022-)")
             mock_db_rename.assert_called_once_with(r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War", r"D:\Downloads\ANIME\Bleach Thousand-Year Blood War (2022-)")
+
+    def test_cleanup_empty_folders_removes_nested_empty_directories(self):
+        import tempfile
+        import shutil
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # Structure:
+            # temp_dir/
+            #   empty_anime/
+            #   nested_anime/
+            #     season_1/
+            #   anime_with_file/
+            #     ep1.mp4
+            #   anime_with_junk/
+            #     thumbs.db
+            empty_folder = os.path.join(temp_dir, "empty_anime")
+            os.makedirs(empty_folder, exist_ok=True)
+
+            nested_folder = os.path.join(temp_dir, "nested_anime", "season_1")
+            os.makedirs(nested_folder, exist_ok=True)
+
+            with_file = os.path.join(temp_dir, "anime_with_file")
+            os.makedirs(with_file, exist_ok=True)
+            with open(os.path.join(with_file, "ep1.mp4"), "w") as f:
+                f.write("content")
+
+            with_junk = os.path.join(temp_dir, "anime_with_junk")
+            os.makedirs(with_junk, exist_ok=True)
+            with open(os.path.join(with_junk, "thumbs.db"), "w") as f:
+                f.write("dummy")
+
+            # Execute cleanup
+            removed = cleanup_empty_folders(temp_dir)
+            self.assertEqual(removed, 4)  # empty_anime, season_1, nested_anime, anime_with_junk
+
+            # Verify existence
+            self.assertFalse(os.path.exists(empty_folder))
+            self.assertFalse(os.path.exists(nested_folder))
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, "nested_anime")))
+            self.assertFalse(os.path.exists(with_junk))
+
+            # Non-empty folder and base dir remain
+            self.assertTrue(os.path.exists(with_file))
+            self.assertTrue(os.path.exists(os.path.join(with_file, "ep1.mp4")))
+            self.assertTrue(os.path.exists(temp_dir))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_cleanup_empty_folders_invalid_base_dir(self):
+        self.assertEqual(cleanup_empty_folders(None), 0)
+        self.assertEqual(cleanup_empty_folders("/nonexistent/folder/12345"), 0)
 
 if __name__ == "__main__":
     unittest.main()

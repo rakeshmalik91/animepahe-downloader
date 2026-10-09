@@ -280,11 +280,11 @@ sequenceDiagram
 
 ## 🧹 Maintenance & Self-Healing Lifecycle
 
-### Stale Entry Pruning (`cleanup_db`)
+### Stale Entry & Empty Folder Pruning (`cleanup_db`)
 Executed automatically at the end of each library scan run:
-1. Queries all `folder_path` values in `tracking`.
-2. Inspects `os.path.exists(folder_path)`.
-3. If the directory has been moved or deleted from disk, automatically issues:
+1. Recursively prunes empty subdirectories bottom-up under `BASE_DOWNLOAD_DIR` via `cleanup_empty_folders()`, while keeping the base directory itself intact.
+2. Queries all `folder_path` values in `tracking`.
+3. If the directory has been moved, deleted, or pruned from disk, automatically issues:
    ```sql
    DELETE FROM tracking WHERE folder_path = ?;
    ```

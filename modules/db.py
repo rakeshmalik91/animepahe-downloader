@@ -14,7 +14,7 @@ import threading
 from datetime import datetime
 import config
 
-from .utils import log_debug, normalize_path
+from .utils import log_debug, normalize_path, cleanup_empty_folders
 
 def init_db():
     conn = sqlite3.connect(config.DB_PATH)
@@ -181,8 +181,13 @@ def rename_tracked_folder(old_path, new_path):
         log_debug(f"DB rename_tracked_folder error: {e}")
 
 
-def cleanup_db():
-    """Remove tracking entries for folders that no longer exist on disk."""
+def cleanup_db(base_dir=None):
+    """Remove tracking entries for folders that no longer exist on disk, and clean up empty folders."""
+    try:
+        cleanup_empty_folders(base_dir)
+    except Exception as e:
+        log_debug(f"Empty folder cleanup error: {e}")
+
     try:
         conn = sqlite3.connect(config.DB_PATH)
         c = conn.cursor()
