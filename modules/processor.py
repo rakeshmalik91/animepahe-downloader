@@ -73,55 +73,65 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
     except ValueError:
         rel_folder = os.path.basename(folder_path)
     tqdm.write(f"\nChecking updates for {anime_title} (id: {anime_id})\n  in '{rel_folder}' (last: {last_ep})...", file=sys.stdout)
-    
+     
 # Silent Season Consistency Check
     folder_name = os.path.basename(folder_path)
     parent_name = os.path.basename(os.path.dirname(folder_path))
     f_s = extract_season_number(folder_name)
     if f_s is None and parent_name:
          f_s = extract_season_number(parent_name)
-         
+          
     if f_s is not None:
          t_s = extract_season_number(anime_title.replace('_', ' '))
          if t_s is None:
              t_s = 1
+           
+         # ALWAYS verify base title similarity, not just when seasons differ
+         # This catches cases where the initial search matched the wrong anime's same season
+         import Levenshtein as _lev
+         new_base = re.sub(r'(?:Season|S)\s*\d+', '', anime_title, flags=re.IGNORECASE).strip()
+         expected_base = re.sub(r'(?:Season|S)\s*\d+', '', parent_name if parent_name and len(parent_name) > 3 else folder_name, flags=re.IGNORECASE)
+         expected_base = re.sub(r'\s*\(\d{4}[^)]*\)', '', expected_base).strip()
+         nb_norm = re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9 ]', ' ', new_base.lower())).strip()
+         eb_norm = re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9 ]', ' ', expected_base.lower())).strip()
+         base_dist = _lev.distance(nb_norm, eb_norm)
+         base_threshold = getattr(config, 'MAX_DISTANCE_THRESHOLD', 20)
+         max_allowed = min(base_threshold, max(3, int(max(len(nb_norm), len(eb_norm)) * 0.25)))
+         base_ratio = _lev.ratio(nb_norm, eb_norm)
          
-         if f_s != t_s:
-             search_q = f"{parent_name if parent_name and len(parent_name)>3 else folder_name} {folder_name}"
-             search_q = re.sub(r'\s*\(\d{4}[^)]*\)', '', search_q).strip()
-             new_id, new_title, _, dist = search_anime(client, search_q)
-             
-             if new_id and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
-                 # This is a silent background check. If the distance is too high, 
-                 # the match is likely wrong, so just ignore it without prompting.
-                 new_id, new_title = None, None
-             
-             if new_id and new_id != anime_id:
-                 n_s = extract_season_number(new_title.replace('_', ' '))
-                 if n_s is None:
-                     n_s = 1
-                 if n_s == f_s:
-                     # Guard: verify the new title's base name is actually related to
-                     # the folder's expected anime, not just a different anime that
-                     # happens to share the same season number (e.g. "Kingdom Season 4"
-                     # vs "Re Zero Season 4").
-                     import Levenshtein as _lev
-                     new_base = re.sub(r'(?:Season|S)\s*\d+', '', new_title, flags=re.IGNORECASE).strip()
-                     expected_base = re.sub(r'(?:Season|S)\s*\d+', '', parent_name if parent_name and len(parent_name) > 3 else folder_name, flags=re.IGNORECASE)
-                     expected_base = re.sub(r'\s*\(\d{4}[^)]*\)', '', expected_base).strip()
-                     nb_norm = re.sub(r'[^a-z0-9 ]', ' ', new_base.lower()).strip()
-                     eb_norm = re.sub(r'[^a-z0-9 ]', ' ', expected_base.lower()).strip()
-                     base_dist = _lev.distance(nb_norm, eb_norm)
-                     base_threshold = getattr(config, 'MAX_DISTANCE_THRESHOLD', 20)
-                     if base_dist > base_threshold:
-                          log_debug(f"Season consistency check: rejected '{new_title}' for '{folder_name}' "
-                                    f"(base title distance {base_dist} > {base_threshold}: '{nb_norm}' vs '{eb_norm}')")
-                     else:
-                          tqdm.write(f"  Note: Correcting mismatched ID for '{folder_name}'.", file=sys.stdout)
-                          tqdm.write(f"        Switching from '{anime_title}' -> '{new_title}'.", file=sys.stdout)
-                          save_tracked(folder_path, new_id, new_title, True)
-                          anime_id, anime_title = new_id, new_title
-                          last_ep = get_latest_episode_local(folder_path) or 0
+         base_mismatch = base_dist > max_allowed or base_ratio < 0.75
+          
+         if f_s != t_s or base_mismatch:
+              search_q = f"{parent_name if parent_name and len(parent_name)>3 else folder_name} {folder_name}"
+              search_q = re.sub(r'\s*\(\d{4}[^)]*\)', '', search_q).strip()
+              new_id, new_title, _, dist = search_anime(client, search_q)
+              
+              if new_id and dist > getattr(config, 'MAX_DISTANCE_THRESHOLD', 20):
+                  # This is a silent background check. If the distance is too high, 
+                  # the match is likely wrong, so just ignore it without prompting.
+                  new_id, new_title = None, None
+              
+              if new_id and new_id != anime_id:
+                  n_s = extract_season_number(new_title.replace('_', ' '))
+                  if n_s is None:
+                      n_s = 1
+                  if n_s == f_s:
+                      # Guard: verify the new title's base name is actually related to
+                      # the folder's expected anime, not just a different anime that
+                      # happens to share the same season number (e.g. "Kingdom Season 4"
+                      # vs "Re Zero Season 4").
+                      new_base2 = re.sub(r'(?:Season|S)\s*\d+', '', new_title, flags=re.IGNORECASE).strip()
+                      nb_norm2 = re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9 ]', ' ', new_base2.lower())).strip()
+                      base_dist2 = _lev.distance(nb_norm2, eb_norm)
+                      if base_dist2 > base_threshold:
+                           log_debug(f"Season consistency check: rejected '{new_title}' for '{folder_name}' "
+                                     f"(base title distance {base_dist2} > {base_threshold}: '{nb_norm2}' vs '{eb_norm}')")
+                      else:
+                           tqdm.write(f"  Note: Correcting mismatched ID for '{folder_name}'.", file=sys.stdout)
+                           tqdm.write(f"        Switching from '{anime_title}' -> '{new_title}'.", file=sys.stdout)
+                           save_tracked(folder_path, new_id, new_title, True)
+                           anime_id, anime_title = new_id, new_title
+                           last_ep = get_latest_episode_local(folder_path) or 0
 
     try:
         anime_page_url = f"{config.ANIMEPAHE_URL}/anime/{anime_id}"
