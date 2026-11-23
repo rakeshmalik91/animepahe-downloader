@@ -155,6 +155,5 @@ Thumbs.db
 *_log.txt
 tracking.db
 tests/test_tracking.db
-docs/TODO.md
 
 .kilo

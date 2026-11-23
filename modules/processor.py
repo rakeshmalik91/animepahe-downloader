@@ -20,7 +20,7 @@ from .scraper import search_anime, get_direct_link, resolve_kwik_direct
 from .downloader import download_file
 from .my_idm import reset_backlog_entries, add_backlog_entry, write_backlog_entries
 
-def process_one_folder(client, folder_path, anime_id=None, anime_title=None, quality="720p", lang=None, episodes_filter=None, parallel=1, ignore_db_failures=False):
+def process_one_folder(client, folder_path, anime_id=None, anime_title=None, quality="720p", lang=None, episodes_filter=None, parallel=1, ignore_db_failures=False, manual_year=None, add_years=None, update_years=None):
     scraper = cloudscraper.create_scraper(browser={'browser': 'firefox', 'platform': 'windows', 'mobile': False})
     pos_lock = threading.Lock()
     reset_backlog_entries()
@@ -64,7 +64,7 @@ def process_one_folder(client, folder_path, anime_id=None, anime_title=None, qua
         except: pass
         if not anime_title: anime_title = os.path.basename(folder_path)
 
-    folder_path = ensure_folder_year(folder_path, anime_title=anime_title, anime_id=anime_id, client=client)
+    folder_path = ensure_folder_year(folder_path, anime_title=anime_title, anime_id=anime_id, client=client, manual_year=manual_year, add_years=add_years, update_years=update_years)
 
 
     last_ep = get_latest_episode_local(folder_path) or 0

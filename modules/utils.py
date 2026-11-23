@@ -562,14 +562,293 @@ def get_anime_parent_folder(folder_path):
     else:
         return folder_abs
 
-def ensure_folder_year(folder_path, anime_title=None, anime_id=None, meta=None, client=None):
+def fetch_jikan_year(client, anime_title):
     """
-    Renames top-level anime folder to include release year tag (starting year) at the end if missing or incorrect.
-    Ensures season folders do NOT have year tag appended (and strips year from season folders if present).
+    Queries Jikan (MAL) API for anime_title and returns release year as int or None.
+    """
+    if not anime_title or not client:
+        return None
+    try:
+        clean_q = re.sub(r'\s*\(\d{4}[^)]*\)', '', anime_title).strip()
+        clean_q = clean_q.replace('：', ' ').replace(':', ' ')
+        jikan_base = getattr(config, 'JIKAN_API_URL', 'https://api.jikan.moe/v4')
+        url = f"{jikan_base}/anime?q={clean_q}&limit=1"
+        res = client.get(url, timeout=10)
+        if res.status_code == 200:
+            jdata = res.json()
+            if jdata and jdata.get('data'):
+                item = jdata['data'][0]
+                if item.get('year'):
+                    return int(item['year'])
+                aired_prop = item.get('aired', {}).get('prop', {}).get('from', {})
+                if aired_prop and aired_prop.get('year'):
+                    return int(aired_prop['year'])
+    except Exception as e:
+        log_debug(f"Jikan API year fetch error: {e}")
+    return None
+
+def extract_year_from_title(title):
+    """
+    Extracts release year from an official AnimePahe title string if present (e.g. 'Ranma ½ (2024)' -> 2024).
+    """
+    if not title:
+        return None
+    m = re.findall(r'\b(?:19|20)\d{2}\b', str(title))
+    if m:
+        try:
+            return int(m[0])
+        except (ValueError, TypeError):
+            pass
+    return None
+
+def format_manual_year(year_val):
+    """
+    Validates and formats a manual year string: e.g. 2024 -> '(2024)', '(2020-2024)' -> '(2020-2024)'.
+    """
+    if not year_val:
+        return ""
+    y_str = str(year_val).strip()
+    if not y_str.startswith('(') and not y_str.endswith(')'):
+        return f"({y_str})"
+    return y_str
+
+def is_franchise_match(base_title, candidate_title):
+    """
+    Checks if candidate_title belongs to the same franchise as base_title,
+    filtering out unrelated fuzzy search matches.
+    """
+    if not base_title or not candidate_title:
+        return False
+    import Levenshtein
+
+    def _norm(s):
+        s = re.sub(r'\s*\(\d{4}(?:-\d{4}|-)?\)', '', s)
+        s = re.sub(r'(?:Season|S)\s*\d+', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'[^a-z0-9 ]', ' ', s.lower())
+        return re.sub(r'\s+', ' ', s).strip()
+
+    b_clean = _norm(base_title)
+    c_clean = _norm(candidate_title)
+    if not b_clean or not c_clean:
+        return False
+    if c_clean.startswith(b_clean) or b_clean.startswith(c_clean):
+        return True
+    if Levenshtein.ratio(b_clean, c_clean) >= 0.7:
+        return True
+    return False
+
+def ensure_folder_year(folder_path, anime_title=None, anime_id=None, meta=None, client=None,
+                       manual_year=None, add_years=None, update_years=None):
+    """
+    Renames top-level anime folder to include release year tag at the end.
+    - If manual_year is given, overrides all and applies it.
+    - If folder already has year tag: keeps it unless update_years=True or manual_year is given.
+    - If folder lacks year tag: adds year if add_years=True (defaults True).
+    - If single-season folder: fetches year for that specific anime entry.
+    - If multi-season folder: gathers years from all matching franchise seasons and formats as
+      (oldest-latest) or (oldest-) if still airing.
+    - Fallbacks: AnimePahe -> Jikan/MAL API -> AnimePahe official title string.
+    Ensures season subfolders do NOT have year tag appended.
     Returns updated folder_path.
     """
     if not folder_path or not os.path.exists(folder_path):
         return folder_path
+
+    if add_years is None:
+        add_years = getattr(config, 'ADD_YEARS', getattr(config, 'ENABLE_YEAR_TAGS', True))
+    if update_years is None:
+        update_years = getattr(config, 'UPDATE_YEARS', False)
+
+    if not manual_year and not add_years and not update_years:
+        return folder_path
+
+    # Clean season folder name if it accidentally has a year tag attached
+    folder_name = os.path.basename(folder_path)
+    parent_dir = os.path.dirname(folder_path)
+    if is_season_folder_name(folder_name):
+        clean_season_name = format_anime_folder_name(folder_name, "")
+        if clean_season_name != folder_name:
+            new_season_path = os.path.join(parent_dir, clean_season_name)
+            if not os.path.exists(new_season_path):
+                try:
+                    os.rename(folder_path, new_season_path)
+                    from .db import rename_tracked_folder
+                    rename_tracked_folder(folder_path, new_season_path)
+                    folder_path = new_season_path
+                except Exception as e:
+                    log_debug(f"Error cleaning season folder name: {e}")
+
+    target_anime_folder = get_anime_parent_folder(folder_path)
+    if not os.path.exists(target_anime_folder):
+        return folder_path
+
+    anime_folder_name = os.path.basename(target_anime_folder)
+    anime_parent_dir = os.path.dirname(target_anime_folder)
+
+    has_existing_year = bool(re.search(r'\((?:19|20)\d{2}(?:-(?:19|20)\d{2}|-)?\)$', anime_folder_name))
+
+    # If folder already contains a year, don't change it unless update_years or manual_year is passed
+    if has_existing_year and not update_years and not manual_year:
+        return folder_path
+
+    # If folder lacks a year and add_years is false, don't add it
+    if not has_existing_year and not add_years and not update_years and not manual_year:
+        return folder_path
+
+    clean_anime_title = re.sub(r'\s*\(\d{4}(?:-\d{4}|-)?\)$', '', anime_folder_name).strip()
+
+    # Manual year specified
+    if manual_year:
+        year_tag = format_manual_year(manual_year)
+        new_anime_folder_name = f"{clean_anime_title} {year_tag}".strip()
+        if new_anime_folder_name != anime_folder_name:
+            new_anime_path = os.path.join(anime_parent_dir, new_anime_folder_name)
+            if not os.path.exists(new_anime_path):
+                try:
+                    os.rename(target_anime_folder, new_anime_path)
+                    from .db import rename_tracked_folder
+                    rename_tracked_folder(target_anime_folder, new_anime_path)
+                    log_debug(f"Renamed anime folder with manual year tag: '{anime_folder_name}' -> '{new_anime_folder_name}'")
+                    if os.path.abspath(folder_path) == os.path.abspath(target_anime_folder):
+                        return new_anime_path
+                    else:
+                        rel_sub = os.path.relpath(folder_path, target_anime_folder)
+                        return os.path.join(new_anime_path, rel_sub)
+                except Exception as e:
+                    log_debug(f"Error renaming anime folder: {e}")
+        return folder_path
+
+    # Check if target anime folder contains multiple season subdirectories
+    season_subdirs = []
+    try:
+        if os.path.exists(target_anime_folder):
+            season_subdirs = [
+                s for s in os.listdir(target_anime_folder)
+                if os.path.isdir(os.path.join(target_anime_folder, s)) and is_season_folder_name(s)
+            ]
+    except Exception:
+        pass
+    folder_season_num = extract_season_number(folder_name)
+    is_multi_season = (len(season_subdirs) > 1) or (folder_season_num is not None and folder_season_num > 1)
+
+    year_tag = ""
+
+    if is_multi_season:
+        # Multi-season folder: search AnimePahe for all seasons of this franchise
+        franchise_years = []
+        latest_status = None
+        latest_year = -1
+
+        if client:
+            query_title = anime_title or clean_anime_title
+            query_clean = re.sub(r'\s*\(\d{4}[^)]*\)', '', query_title).strip()
+            query_clean = query_clean.replace('：', ' ').replace(':', ' ')
+            try:
+                from .scraper import search_anime
+                results, api_ok = search_anime(client, query_clean, return_all=True)
+                if results:
+                    for r_aid, r_clean, r_title, r_meta in results:
+                        if is_franchise_match(clean_anime_title, r_title):
+                            if r_meta and r_meta.get('year'):
+                                try:
+                                    y_int = int(r_meta.get('year'))
+                                    franchise_years.append(y_int)
+                                    if y_int >= latest_year:
+                                        latest_year = y_int
+                                        latest_status = r_meta.get('status')
+                                except (ValueError, TypeError):
+                                    pass
+            except Exception as e:
+                log_debug(f"Multi-season search API error: {e}")
+
+        # Also incorporate direct meta if provided
+        if meta and meta.get('year'):
+            try:
+                y_int = int(meta.get('year'))
+                franchise_years.append(y_int)
+                if y_int >= latest_year:
+                    latest_year = y_int
+                    latest_status = meta.get('status')
+            except (ValueError, TypeError):
+                pass
+
+        if franchise_years:
+            oldest_year = min(franchise_years)
+            latest_y = max(franchise_years)
+            is_ongoing = False
+            if latest_status:
+                st = str(latest_status).lower()
+                if any(x in st for x in ['currently airing', 'releasing', 'ongoing']):
+                    is_ongoing = True
+            if is_ongoing:
+                year_tag = f"({oldest_year}-)"
+            elif oldest_year != latest_y:
+                year_tag = f"({oldest_year}-{latest_y})"
+            else:
+                year_tag = f"({oldest_year})"
+
+    if not year_tag:
+        # Single-season folder or multi-season fallback: fetch year for the specific anime
+        single_year = None
+        # 1. From meta if available
+        if meta and meta.get('year'):
+            try:
+                single_year = int(meta.get('year'))
+            except (ValueError, TypeError):
+                pass
+
+        # 2. From AnimePahe search for the specific anime if client available
+        if single_year is None and client:
+            query_title = anime_title or clean_anime_title
+            query_clean = re.sub(r'\s*\(\d{4}[^)]*\)', '', query_title).strip()
+            query_clean = query_clean.replace('：', ' ').replace(':', ' ')
+            try:
+                from .scraper import search_anime
+                results, api_ok = search_anime(client, query_clean, return_all=True)
+                if results:
+                    for r_aid, r_clean, r_title, r_meta in results:
+                        if is_franchise_match(clean_anime_title, r_title):
+                            if r_meta and r_meta.get('year'):
+                                try:
+                                    single_year = int(r_meta.get('year'))
+                                    break
+                                except (ValueError, TypeError):
+                                    pass
+            except Exception as e:
+                log_debug(f"Single-season AnimePahe year fetch error: {e}")
+
+        # 3. Fallback to Jikan (MAL) API
+        if single_year is None and client:
+            single_year = fetch_jikan_year(client, anime_title or clean_anime_title)
+
+        # 4. Fallback to extracting year from AnimePahe's official title string (e.g. Ranma ½ (2024))
+        if single_year is None and anime_title:
+            single_year = extract_year_from_title(anime_title)
+
+        if single_year:
+            year_tag = f"({single_year})"
+
+    if not year_tag:
+        return folder_path
+
+    new_anime_folder_name = f"{clean_anime_title} {year_tag}".strip()
+    if new_anime_folder_name != anime_folder_name:
+        new_anime_path = os.path.join(anime_parent_dir, new_anime_folder_name)
+        if not os.path.exists(new_anime_path):
+            try:
+                os.rename(target_anime_folder, new_anime_path)
+                from .db import rename_tracked_folder
+                rename_tracked_folder(target_anime_folder, new_anime_path)
+                log_debug(f"Renamed anime folder with correct year tag: '{anime_folder_name}' -> '{new_anime_folder_name}'")
+
+                if os.path.abspath(folder_path) == os.path.abspath(target_anime_folder):
+                    return new_anime_path
+                else:
+                    rel_sub = os.path.relpath(folder_path, target_anime_folder)
+                    return os.path.join(new_anime_path, rel_sub)
+            except Exception as e:
+                log_debug(f"Error renaming anime folder: {e}")
+    return folder_path
 
     if not getattr(config, 'ENABLE_YEAR_TAGS', True):
         return folder_path
@@ -683,7 +962,8 @@ def ensure_folder_year(folder_path, anime_title=None, anime_id=None, meta=None, 
                     return os.path.join(new_anime_path, rel_sub)
             except Exception as e:
                 log_debug(f"Error renaming anime folder: {e}")
-    return folder_path
+
+    return folder_path
 
 
 def cleanup_empty_folders(base_dir=None) -> int:

@@ -60,7 +60,9 @@ SLOW_DOWNLOAD_THRESHOLD_KBPS = 500      # Fallback to normal download if speed d
 DEFAULT_PARALLEL_DOWNLOADS = 2          # Number of concurrent episode downloads
 
 # Folder naming settings
-ENABLE_YEAR_TAGS = True                 # Append release year to top-level anime folder names
+ADD_YEARS = True                         # Add release year to anime folders that lack a year
+UPDATE_YEARS = False                     # Update existing folder years and add missing years
+ENABLE_YEAR_TAGS = True                  # Deprecated backward-compatibility alias
 
 # Accessibility settings
 ENABLE_NOTIFICATIONS = True

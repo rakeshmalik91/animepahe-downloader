@@ -291,5 +291,41 @@ class TestMain(unittest.TestCase):
         animepahe_download.main()
         self.mock_retry_failed.assert_called_once_with(mock_client.return_value, quality=config.DEFAULT_QUALITY, lang=None, parallel=config.DEFAULT_PARALLEL_DOWNLOADS)
 
+    @patch("httpx.Client")
+    def test_main_manual_year_passed_to_process_folder(self, mock_client):
+        sys.argv = ["animepahe_download.py", "Overgeared", "-y", "2026"]
+        self.mock_get_tracked.return_value = None
+        self.mock_search.return_value = ("aid_1", "Overgeared", True, 0)
+        self.mock_process_folder.return_value = (True, "aid_1", "Overgeared")
+
+        animepahe_download.main()
+
+        self.mock_process_folder.assert_called_once_with(
+            ANY,
+            os.path.join(config.BASE_DOWNLOAD_DIR, "Overgeared"),
+            "aid_1", "Overgeared",
+            "720p", None, episodes_filter=None, parallel=ANY, manual_year="2026"
+        )
+
+    @patch("httpx.Client")
+    @patch("tqdm.tqdm.write")
+    def test_main_manual_year_library_scan_rejected(self, mock_write, mock_client):
+        sys.argv = ["animepahe_download.py", "--year", "2026"]
+        animepahe_download.main()
+        self.mock_process_folder.assert_not_called()
+        calls = [str(call) for call in mock_write.call_args_list]
+        self.assertTrue(any("only works for single anime download" in c or "only be used for single anime download" in c for c in calls))
+
+    @patch("httpx.Client")
+    def test_main_legacy_standalone_y_flag_acts_as_yes(self, mock_client):
+        sys.argv = ["animepahe_download.py", "Frieren", "-y"]
+        self.mock_get_tracked.return_value = None
+        self.mock_search.return_value = ("anime_123", "Frieren Title", True, 5)
+        self.mock_process_folder.return_value = (True, "anime_123", "Frieren Title")
+
+        animepahe_download.main()
+
+        self.mock_process_folder.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()

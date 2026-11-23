@@ -490,6 +490,141 @@ class TestUtils(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_overgeared_single_season(self, mock_db_rename, mock_rename, mock_exists):
+        """Single season folder for Overgeared should get (2026), filtering out Animegataris (2017)."""
+        from modules.utils import ensure_folder_year
+        config.BASE_DOWNLOAD_DIR = r"D:\Downloads\ANIME"
+        mock_client = MagicMock()
+        mock_results = [
+            ("aid1", "Overgeared", "Overgeared", {"year": 2026, "status": "Currently Airing"}),
+            ("aid2", "Animegataris", "Animegataris", {"year": 2017, "status": "Finished Airing"}),
+        ]
+        with patch("modules.scraper.search_anime", return_value=(mock_results, True)):
+            mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Overgeared (2026)"
+            res = ensure_folder_year(
+                r"D:\Downloads\ANIME\Overgeared",
+                anime_title="Overgeared",
+                client=mock_client
+            )
+            self.assertEqual(res, r"D:\Downloads\ANIME\Overgeared (2026)")
+            mock_rename.assert_called_once_with(r"D:\Downloads\ANIME\Overgeared", r"D:\Downloads\ANIME\Overgeared (2026)")
+
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_multi_season_finished(self, mock_db_rename, mock_rename, mock_exists):
+        """Multi-season folder with finished seasons gets (oldest-latest)."""
+        from modules.utils import ensure_folder_year
+        config.BASE_DOWNLOAD_DIR = r"D:\Downloads\ANIME"
+        mock_client = MagicMock()
+        mock_results = [
+            ("aid1", "Series S1", "Series Season 1", {"year": 2017, "status": "Finished Airing"}),
+            ("aid2", "Series S2", "Series Season 2", {"year": 2020, "status": "Finished Airing"}),
+        ]
+        with patch("modules.scraper.search_anime", return_value=(mock_results, True)):
+            mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Series (2017-2020)"
+            res = ensure_folder_year(
+                r"D:\Downloads\ANIME\Series\Season 2",
+                anime_title="Series Season 2",
+                client=mock_client
+            )
+            self.assertEqual(res, r"D:\Downloads\ANIME\Series (2017-2020)\Season 2")
+            mock_rename.assert_called_once_with(r"D:\Downloads\ANIME\Series", r"D:\Downloads\ANIME\Series (2017-2020)")
+
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_jikan_fallback(self, mock_db_rename, mock_rename, mock_exists):
+        """If AnimePahe has no year, fall back to Jikan API."""
+        from modules.utils import ensure_folder_year
+        config.BASE_DOWNLOAD_DIR = r"D:\Downloads\ANIME"
+        mock_client = MagicMock()
+        mock_results = [("aid1", "Obscure Anime", "Obscure Anime", {"year": None})]
+        jikan_mock_resp = MagicMock()
+        jikan_mock_resp.status_code = 200
+        jikan_mock_resp.json.return_value = {"data": [{"year": 2023}]}
+        mock_client.get.return_value = jikan_mock_resp
+
+        with patch("modules.scraper.search_anime", return_value=(mock_results, True)):
+            mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Obscure Anime (2023)"
+            res = ensure_folder_year(
+                r"D:\Downloads\ANIME\Obscure Anime",
+                anime_title="Obscure Anime",
+                client=mock_client
+            )
+            self.assertEqual(res, r"D:\Downloads\ANIME\Obscure Anime (2023)")
+
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_title_fallback(self, mock_db_rename, mock_rename, mock_exists):
+        """If AnimePahe and Jikan have no year, extract year from AnimePahe title."""
+        from modules.utils import ensure_folder_year
+        config.BASE_DOWNLOAD_DIR = r"D:\Downloads\ANIME"
+        mock_client = MagicMock()
+        mock_results = [("aid1", "Ranma 1/2", "Ranma ½ (2024)", {"year": None})]
+        jikan_mock_resp = MagicMock()
+        jikan_mock_resp.status_code = 404
+        mock_client.get.return_value = jikan_mock_resp
+
+        with patch("modules.scraper.search_anime", return_value=(mock_results, True)):
+            mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Ranma ½ (2024)"
+            res = ensure_folder_year(
+                r"D:\Downloads\ANIME\Ranma ½",
+                anime_title="Ranma ½ (2024)",
+                client=mock_client
+            )
+            self.assertEqual(res, r"D:\Downloads\ANIME\Ranma ½ (2024)")
+
+    @patch("os.path.exists", return_value=True)
+    @patch("os.rename")
+    def test_ensure_folder_year_existing_not_updated_without_flag(self, mock_rename, mock_exists):
+        """Existing year tag in folder name is preserved unless update_years=True."""
+        from modules.utils import ensure_folder_year
+        res = ensure_folder_year(
+            r"D:\Downloads\ANIME\Overgeared (2017-)",
+            anime_title="Overgeared",
+            meta={"year": 2026},
+            update_years=False
+        )
+        self.assertEqual(res, r"D:\Downloads\ANIME\Overgeared (2017-)")
+        mock_rename.assert_not_called()
+
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_existing_updated_with_flag(self, mock_db_rename, mock_rename, mock_exists):
+        """Existing year tag is updated when update_years=True."""
+        from modules.utils import ensure_folder_year
+        mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Overgeared (2026)"
+        res = ensure_folder_year(
+            r"D:\Downloads\ANIME\Overgeared (2017-)",
+            anime_title="Overgeared",
+            meta={"year": 2026},
+            update_years=True
+        )
+        self.assertEqual(res, r"D:\Downloads\ANIME\Overgeared (2026)")
+        mock_rename.assert_called_once_with(r"D:\Downloads\ANIME\Overgeared (2017-)", r"D:\Downloads\ANIME\Overgeared (2026)")
+
+    @patch("os.path.exists")
+    @patch("os.rename")
+    @patch("modules.db.rename_tracked_folder")
+    def test_ensure_folder_year_manual_year_override(self, mock_db_rename, mock_rename, mock_exists):
+        """manual_year overrides everything, including existing year."""
+        from modules.utils import ensure_folder_year
+        mock_exists.side_effect = lambda path: path != r"D:\Downloads\ANIME\Overgeared (2025)"
+        res = ensure_folder_year(
+            r"D:\Downloads\ANIME\Overgeared (2017-)",
+            anime_title="Overgeared",
+            meta={"year": 2026},
+            manual_year="2025"
+        )
+        self.assertEqual(res, r"D:\Downloads\ANIME\Overgeared (2025)")
+        mock_rename.assert_called_once_with(r"D:\Downloads\ANIME\Overgeared (2017-)", r"D:\Downloads\ANIME\Overgeared (2025)")
+
     def test_cleanup_empty_folders_invalid_base_dir(self):
         self.assertEqual(cleanup_empty_folders(None), 0)
         self.assertEqual(cleanup_empty_folders("/nonexistent/folder/12345"), 0)

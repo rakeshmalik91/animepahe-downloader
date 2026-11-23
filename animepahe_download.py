@@ -91,10 +91,12 @@ def main(cli_args=None):
     parser.add_argument("--all-seasons", action="store_true", help="Search and optionally download all seasons/movies for the given name")
     parser.add_argument("--more-seasons", action="store_true", help="Scan existing folders for new untracked seasons")
     parser.add_argument("--new-seasons", action="store_true", help="Scan existing folders and ONLY look for newer seasons based on season number or release year fallback")
-    parser.add_argument("--add-years", action="store_true", help="Scan library and add release year tag to anime folders if missing")
-    parser.add_argument("--year-tags", dest="enable_year_tags", action="store_true", default=None, help="Enable appending release year tags to anime folders")
-    parser.add_argument("--no-year-tags", dest="enable_year_tags", action="store_false", help="Disable appending release year tags to anime folders")
-    parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts and auto-download")
+    parser.add_argument("--add-years", dest="add_years", action="store_true", default=None, help="Add release year tags to folders that lack a year (default: True)")
+    parser.add_argument("--no-add-years", dest="add_years", action="store_false", help="Disable adding release year tags to anime folders")
+    parser.add_argument("--update-years", action="store_true", default=False, help="Update release year tags on folders that already have a year and add to missing folders (default: False)")
+    parser.add_argument("-y", "--year", dest="year", nargs="?", const="__YES__", default=None, help="Manually specify release year for single anime download (e.g. 2024 or 2017-2026)")
+    parser.add_argument("--yes", action="store_true", help="Skip confirmation prompts and auto-download")
+    parser.add_argument("--format-years", action="store_true", help="Scan library and format release year tags on all folders without downloading")
     parser.add_argument("-ep", "--episodes", help="Specific episode(s) to download (e.g. 1,2,5-10)")
     parser.add_argument("--parallel", type=int, default=config.DEFAULT_PARALLEL_DOWNLOADS, help="Number of parallel episode downloads")
     parser.add_argument("--skip-folder", help="Manually add a folder to the skip list forever")
@@ -107,8 +109,20 @@ def main(cli_args=None):
     
     args = parser.parse_args(cli_args)
     
-    if args.enable_year_tags is not None:
-        config.ENABLE_YEAR_TAGS = args.enable_year_tags
+    if args.year == "__YES__":
+        args.yes = True
+        args.year = None
+
+    if args.year and not args.name and not args.url:
+        tqdm.write("Error: --year or -y can only be used for single anime download, not complete library scan.", file=sys.stdout)
+        return
+
+    if args.add_years is not None:
+        config.ADD_YEARS = args.add_years
+        config.ENABLE_YEAR_TAGS = args.add_years
+
+    if args.update_years:
+        config.UPDATE_YEARS = True
 
     if args.use_my_idm is not None:
         config.USE_MY_IDM = args.use_my_idm
@@ -122,7 +136,7 @@ def main(cli_args=None):
         gui.main()
         return
 
-    if args.add_years:
+    if args.format_years:
         tqdm.write(f"Formatting year tags for anime folders in: {config.BASE_DOWNLOAD_DIR}", file=sys.stdout)
         client = httpx.Client(timeout=15, follow_redirects=True)
         try:
@@ -135,7 +149,9 @@ def main(cli_args=None):
                     folder_path = os.path.join(config.BASE_DOWNLOAD_DIR, d)
                     tracked = get_tracked(folder_path)
                     aid, title = (tracked[0], tracked[1]) if tracked else (None, None)
-                    new_path = ensure_folder_year(folder_path, anime_title=title or d, anime_id=aid, client=client)
+                    new_path = ensure_folder_year(folder_path, anime_title=title or d, anime_id=aid, client=client,
+                                                  add_years=getattr(config, 'ADD_YEARS', True),
+                                                  update_years=getattr(config, 'UPDATE_YEARS', False))
                     if new_path != folder_path:
                         count += 1
                 tqdm.write(f"Done. Updated {count} anime folder(s) with release year tags.", file=sys.stdout)
@@ -506,7 +522,10 @@ def main(cli_args=None):
             os.makedirs(potential_path, exist_ok=True)
             original_aid = aid
             original_title = title
-            success, aid, title = process_one_folder(client, potential_path, aid, title, args.quality, args.lang, episodes_filter=target_episodes, parallel=args.parallel)
+            proc_kwargs = {'episodes_filter': target_episodes, 'parallel': args.parallel}
+            if args.year:
+                proc_kwargs['manual_year'] = args.year
+            success, aid, title = process_one_folder(client, potential_path, aid, title, args.quality, args.lang, **proc_kwargs)
             if success:
                 # Always update DB if URL was explicitly provided, if it wasn't tracked before, or if ID/title changed
                 if args.url or not tracked or aid != original_aid or title != original_title:
@@ -545,7 +564,10 @@ def main(cli_args=None):
                 os.makedirs(potential_path, exist_ok=True)
                 tqdm.write(f"  Created new folder: '{potential_path}'.", file=sys.stdout)
             
-            success, aid, title = process_one_folder(client, potential_path, aid, title, args.quality, args.lang, episodes_filter=target_episodes, parallel=args.parallel)
+            proc_kwargs = {'episodes_filter': target_episodes, 'parallel': args.parallel}
+            if args.year:
+                proc_kwargs['manual_year'] = args.year
+            success, aid, title = process_one_folder(client, potential_path, aid, title, args.quality, args.lang, **proc_kwargs)
             if success:
                 save_tracked(potential_path, aid, title, True)
         else:
